@@ -1,3 +1,7 @@
 """Effort-Ultracode: portable multi-agent orchestration with unanimous-consensus debate."""
 
-__version__ = "0.0.1"
+from cluxion_effort_ultracode.core import ConsensusEngine, ConsensusResult
+
+__version__ = "0.1.0"
+
+__all__ = ["ConsensusEngine", "ConsensusResult"]
