@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cluxion-agentplugin-effort-ultracode"
+version = "0.0.1"
+description = "Portable multi-agent ultracode orchestration with a 3-agent adversarial debate that converges to unanimous consensus"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "cluxion" }]
+keywords = ["agent", "ultracode", "multi-agent", "consensus", "debate", "orchestration"]
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3.11", "Programming Language :: Python :: 3.12"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[project.scripts]
+cluxion-ultracode = "cluxion_effort_ultracode.cli:main"
+
+[project.entry-points."hermes_agent.plugins"]
+cluxion-agentplugin-effort-ultracode = "cluxion_effort_ultracode.plugin"
+
+[project.urls]
+Repository = "https://github.com/cluxion/cluxion-Agentplugin-Effort-Ultracode"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cluxion_effort_ultracode"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
