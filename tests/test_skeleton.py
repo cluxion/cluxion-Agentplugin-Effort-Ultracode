@@ -6,5 +6,8 @@ from cluxion_effort_ultracode import cli
 
 
 def test_version(capsys):
+    from cluxion_effort_ultracode import __version__
+
     assert cli.main(["--version"]) == 0
-    assert "cluxion-ultracode 0.1.0" in capsys.readouterr().out
+    # Don't hardcode the version — it changes on every release.
+    assert f"cluxion-ultracode {__version__}" in capsys.readouterr().out
