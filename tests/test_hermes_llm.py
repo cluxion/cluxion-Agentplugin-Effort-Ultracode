@@ -60,6 +60,19 @@ def test_structured_complete_retries_once_after_malformed_json() -> None:
     assert "previous response was not parseable" in retry_prompt
 
 
+def test_structured_complete_treats_empty_code_fence_as_retryable_parse_failure() -> None:
+    llm = HermesSubprocessLlm()
+
+    with patch(
+        "cluxion_effort_ultracode.adapters.hermes_llm.subprocess.run",
+        side_effect=[completed("```\n```"), completed('{"stance":"Adopt"}')],
+    ) as run:
+        result = llm.complete("Prompt", schema={"type": "object"})
+
+    assert result == {"stance": "Adopt"}
+    assert run.call_count == 2
+
+
 def test_missing_hermes_binary_raises_honest_error() -> None:
     llm = HermesSubprocessLlm(binary="missing-hermes")
 

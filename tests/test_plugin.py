@@ -115,3 +115,11 @@ def test_consensus_handler_returns_honest_missing_hermes_error() -> None:
     assert payload["ok"] is False
     assert payload["error"] == "hermes_not_found"
     assert "PATH" in payload["hint"]
+
+
+def test_consensus_handler_returns_json_error_for_non_mapping_args() -> None:
+    handler = plugin.build_consensus_handler(lambda: MissingHermesLlm())
+
+    payload = json.loads(handler("not an object"))
+
+    assert payload == {"ok": False, "error": "ValueError", "message": "args must be an object"}

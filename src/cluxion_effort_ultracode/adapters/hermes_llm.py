@@ -38,20 +38,19 @@ class HermesSubprocessLlm:
         if schema is None:
             return self._run_oneshot(prompt)
 
-        last_error: ConsensusProtocolError | None = None
-        for retry in (False, True):
-            structured_prompt = _structured_prompt(prompt, schema=schema, retry=retry)
-            output = self._run_oneshot(structured_prompt)
-            try:
-                return _parse_json_object(output)
-            except ConsensusProtocolError as exc:
-                last_error = exc
-                if not retry:
-                    continue
-                raise ConsensusProtocolError(
-                    f"Hermes structured output was not valid JSON after one retry: {exc}"
-                ) from exc
-        raise ConsensusProtocolError(f"Hermes structured output could not be parsed: {last_error}")
+        structured_prompt = _structured_prompt(prompt, schema=schema, retry=False)
+        output = self._run_oneshot(structured_prompt)
+        try:
+            return _parse_json_object(output)
+        except ConsensusProtocolError:
+            pass
+
+        retry_prompt = _structured_prompt(prompt, schema=schema, retry=True)
+        retry_output = self._run_oneshot(retry_prompt)
+        try:
+            return _parse_json_object(retry_output)
+        except ConsensusProtocolError as exc:
+            raise ConsensusProtocolError(f"Hermes structured output was not valid JSON after one retry: {exc}") from exc
 
     def _run_oneshot(self, prompt: str) -> str:
         command = self._command(prompt)
@@ -106,6 +105,8 @@ def _structured_prompt(prompt: str, *, schema: Mapping[str, Any], retry: bool) -
 
 def _parse_json_object(output: str) -> Mapping[str, Any]:
     candidate = _strip_code_fence(output)
+    if not candidate:
+        raise ConsensusProtocolError("Hermes returned empty JSON content")
     try:
         parsed = json.loads(candidate)
     except json.JSONDecodeError as exc:

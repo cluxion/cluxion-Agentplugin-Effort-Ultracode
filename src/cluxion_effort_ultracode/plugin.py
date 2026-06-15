@@ -68,14 +68,17 @@ def register(ctx: object) -> None:
 def build_consensus_handler(llm_factory: object | None = None):
     """Build the Hermes registry handler for cluxion_consensus."""
 
-    def handler(args: dict[str, object], **_: object) -> str:
+    def handler(args: object, **_: object) -> str:
         payload = _handle_consensus(args, llm_factory=llm_factory or _default_llm)
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     return handler
 
 
-def _handle_consensus(args: Mapping[str, object], *, llm_factory: object) -> dict[str, object]:
+def _handle_consensus(args: object, *, llm_factory: object) -> dict[str, object]:
+    if not isinstance(args, Mapping):
+        return {"ok": False, "error": "ValueError", "message": "args must be an object"}
+
     try:
         question = _text_arg(args, "question", required=True)
         context = _text_arg(args, "context", default="")
