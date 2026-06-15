@@ -73,8 +73,8 @@ def test_register_uses_real_hermes_tool_contract() -> None:
 
     plugin.register(ctx)
 
-    assert len(ctx.tools) == 1
-    registered = ctx.tools[0]
+    assert len(ctx.tools) == 2
+    registered = next(t for t in ctx.tools if t["name"] == "cluxion_consensus")
     assert registered["name"] == "cluxion_consensus"
     assert registered["toolset"] == "ultracode"
     assert registered["emoji"] == "🧠"

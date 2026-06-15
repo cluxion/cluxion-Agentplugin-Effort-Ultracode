@@ -12,6 +12,9 @@ from typing import Any
 
 from cluxion_effort_ultracode.adapters import CallableLlmAdapter
 from cluxion_effort_ultracode.core import ConsensusEngine, ConsensusProtocolError
+from cluxion_effort_ultracode.doctor import render_json, render_text, run_doctor
+import importlib.resources
+from pathlib import Path
 
 
 class _ScriptedConsensusLlm:
@@ -37,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     namespace = parser.parse_args(args)
     if namespace.command == "consensus":
         return _run_consensus(namespace)
+    if namespace.command == "doctor":
+        return _doctor(namespace)
     parser.print_help()
     return 2
 
@@ -56,6 +61,9 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="LLM adapter to use. v0.1 ships deterministic mock adapters for local testing.",
     )
+    doctor = subparsers.add_parser("doctor", help="Run embedded health checks")
+    doctor.add_argument("--json", action="store_true")
+    doctor.add_argument("--verbose", action="store_true")
     return parser
 
 
@@ -146,6 +154,28 @@ def _mock_no_consensus_outputs(agents: int, rounds: int) -> list[dict[str, Any]]
                 )
             )
     return outputs
+
+
+def _doctor(namespace):
+    pkg = "cluxion_effort_ultracode.doctor"
+    catalog_path = Path(str(importlib.resources.files(pkg).joinpath("catalog.json")))
+    result = run_doctor(
+        cwd=Path.cwd(),
+        hermes_bin="hermes",
+        catalog_path=catalog_path,
+        probes=__import__(
+            "cluxion_effort_ultracode.doctor.probes", fromlist=["PROBES"]
+        ).PROBES,
+        plugin="effort-ultracode",
+        version=__import__("cluxion_effort_ultracode").__version__,
+    )
+    text = render_text(result, __import__(
+        "cluxion_effort_ultracode.doctor.framework", fromlist=["load_catalog"]
+    ).load_catalog(catalog_path), verbose=bool(getattr(namespace, "verbose", False)))
+    print(text, file=sys.stderr)
+    if getattr(namespace, "json", False):
+        print(render_json(result))
+    return 0 if result.ok else 1
 
 
 if __name__ == "__main__":

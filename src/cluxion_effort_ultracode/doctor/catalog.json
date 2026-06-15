@@ -1,0 +1,481 @@
+[
+  {
+    "check_id": "hermes_on_path",
+    "category": "hermes_contract",
+    "severity": "critical",
+    "what_it_checks": "hermes binary is resolvable on PATH",
+    "failure_symptom": "All tool/subprocess calls to the host fail immediately",
+    "likely_causes": [
+      "Hermes not installed",
+      "PATH not exported in this shell/agent env"
+    ],
+    "fix_steps": [
+      "Run: which hermes",
+      "If missing, install/repair Hermes Agent and ensure its bin dir is on PATH",
+      "For agents, confirm the spawned shell inherits PATH"
+    ],
+    "change_robust": "Uses shutil.which at runtime — independent of any hardcoded path",
+    "detection_method": "shutil.which(ctx.hermes_bin) is not None"
+  },
+  {
+    "check_id": "hermes_version",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "hermes --version is parseable (host is a known-good build)",
+    "failure_symptom": "Unknown host version; contract assumptions may not hold",
+    "likely_causes": [
+      "Hermes build does not print the expected banner",
+      "Broken install"
+    ],
+    "fix_steps": [
+      "Run: hermes --version",
+      "Reinstall Hermes if the version banner is missing"
+    ],
+    "change_robust": "Parses live --version output, not a pinned constant",
+    "detection_method": "regex 'Hermes Agent v<ver>' matches `hermes --version`"
+  },
+  {
+    "check_id": "hermes_oneshot_flag",
+    "category": "hermes_contract",
+    "severity": "critical",
+    "what_it_checks": "host advertises -z/--oneshot (the non-interactive entry every plugin relies on)",
+    "failure_symptom": "Plugin/CLI falls into interactive mode or errors when invoking the host",
+    "likely_causes": [
+      "A Hermes update renamed/removed the oneshot flag"
+    ],
+    "fix_steps": [
+      "Run: hermes --help | grep -- -z",
+      "If absent, pin to a compatible Hermes version or update the plugin to the new flag"
+    ],
+    "change_robust": "Greps live --help output each run — detects a Hermes update that breaks the contract",
+    "detection_method": "'-z' and '--oneshot' present in `hermes --help`"
+  },
+  {
+    "check_id": "entry_point_registered",
+    "category": "registration",
+    "severity": "critical",
+    "what_it_checks": "this plugin's entry point is registered under hermes_agent.plugins and import+register() works",
+    "failure_symptom": "Plugin not loaded by Hermes; its tools/subcommand are absent",
+    "likely_causes": [
+      "pip install incomplete",
+      "entry point metadata missing",
+      "register() import error"
+    ],
+    "fix_steps": [
+      "Run: python -c \"import importlib.metadata as m; print([e.value for e in m.entry_points(group='hermes_agent.plugins') if 'cluxion-agentplugin-effort-ultracode' in e.name.lower()])\"",
+      "Reinstall: pip install --force-reinstall cluxion-agentplugin-effort-ultracode",
+      "Confirm the entry module imports and exposes a callable register"
+    ],
+    "change_robust": "Reads live importlib.metadata.entry_points(), not a config file",
+    "detection_method": "entry_points(group='hermes_agent.plugins') contains this dist and register is callable"
+  },
+  {
+    "check_id": "toolset_valid",
+    "category": "contract_drift",
+    "severity": "high",
+    "what_it_checks": "this plugin's toolset 'ultracode' is listed and enabled by `hermes tools list`",
+    "failure_symptom": "Model cannot see this plugin's tools; --toolsets silently ignores it",
+    "likely_causes": [
+      "Plugin failed to register its toolset",
+      "Hermes toolset registration API changed"
+    ],
+    "fix_steps": [
+      "Run: hermes tools list | grep ultracode",
+      "If missing, reinstall cluxion-agentplugin-effort-ultracode and restart the host",
+      "Verify register_tool used a valid toolset name"
+    ],
+    "change_robust": "Queries live `hermes tools list` for 'ultracode' — catches contract drift on Hermes upgrade",
+    "detection_method": "'ultracode' appears under plugin toolsets in `hermes tools list`"
+  },
+  {
+    "check_id": "install_integrity",
+    "category": "install",
+    "severity": "high",
+    "what_it_checks": "installed distribution version equals the package __version__",
+    "failure_symptom": "Stale or mismatched install; fixes/behaviors may not be the deployed ones",
+    "likely_causes": [
+      "Partial upgrade",
+      "multiple installs shadowing each other"
+    ],
+    "fix_steps": [
+      "Run: pip show cluxion-agentplugin-effort-ultracode",
+      "Force a clean reinstall: pip install --force-reinstall cluxion-agentplugin-effort-ultracode"
+    ],
+    "change_robust": "Compares live importlib.metadata.version() to __version__ — no hardcoding",
+    "detection_method": "importlib.metadata.version('cluxion-agentplugin-effort-ultracode') == __version__"
+  },
+  {
+    "check_id": "hermes_binary_available",
+    "category": "install",
+    "severity": "critical",
+    "what_it_checks": "Whether the Hermes executable is available on PATH or at the configured CLUXION_EFFORT_ULTRACODE_HERMES_BINARY location",
+    "failure_symptom": "ConsensusProtocolError with message 'Hermes executable not found: ...' and handler returns {ok: false, error: 'hermes_not_found', hint: '..PATH..'} at plugin invocation",
+    "likely_causes": [
+      "Hermes not installed or PATH does not include hermes binary",
+      "CLUXION_EFFORT_ULTRACODE_HERMES_BINARY env var points to nonexistent path",
+      "User's shell initialization/venv not active when plugin loads",
+      "Hermes bootstrap incomplete (check ~/.hermes/.hermes-bootstrap-complete exists)"
+    ],
+    "fix_steps": [
+      "Verify hermes is in PATH: run 'which hermes' - should return /path/to/hermes",
+      "If missing, check Hermes installation: hermes --version should return version string",
+      "If env var CLUXION_EFFORT_ULTRACODE_HERMES_BINARY is set, verify path exists: test -x $CLUXION_EFFORT_ULTRACODE_HERMES_BINARY",
+      "Verify Hermes bootstrap completed: test -f ~/.hermes/.hermes-bootstrap-complete",
+      "If bootstrap incomplete, run: hermes --check-setup or similar bootstrap command",
+      "Ensure venv is active if Hermes was installed in venv (hermes --version should work outside venv for global install)"
+    ],
+    "change_robust": "Detection probes the live hermes binary availability (FileNotFoundError on subprocess.run), not config files. Stays valid across hermes path/version changes.",
+    "detection_method": "Attempt to spawn subprocess using HermesSubprocessLlm(binary=...).complete('test'); catch FileNotFoundError which is wrapped as HermesExecutableNotFoundError"
+  },
+  {
+    "check_id": "hermes_subprocess_launchable",
+    "category": "native_backend",
+    "severity": "critical",
+    "what_it_checks": "Whether hermes -z subprocess can be launched and does not crash immediately (permission, shebang, corrupted binary)",
+    "failure_symptom": "HermesExecutableNotFoundError or ConsensusProtocolError with 'hermes -z failed to start: [OSError details]' during plugin handler execution",
+    "likely_causes": [
+      "hermes binary has wrong permissions (not executable)",
+      "hermes script has broken shebang or encoding issues",
+      "hermes executable is for wrong architecture/OS",
+      "shell script wrapper missing dependencies (e.g., Python path)",
+      "Hermes bootstrap corruption (binary mismatch with venv)"
+    ],
+    "fix_steps": [
+      "Check hermes permissions: test -x $(which hermes)",
+      "If not executable, fix: chmod +x $(which hermes)",
+      "Verify hermes runs standalone: hermes --version (should print version without errors)",
+      "Check system Python in hermes shebang: head -1 $(which hermes) should show #!/path/to/python3 or #!/usr/bin/env python3",
+      "If shebang is broken, reinstall Hermes via bootstrap",
+      "Check host macOS version: hermes may require macOS 11+ for native arm64/x86_64 binaries",
+      "If mixed arch (e.g., Intel hermes on Apple Silicon), reinstall: hermes --reinstall or check ARCHFLAGS"
+    ],
+    "change_robust": "Detection depends on actual subprocess invocation (OSError from subprocess.run), not cached state. Detects corruption at runtime.",
+    "detection_method": "Attempt HermesSubprocessLlm().complete('test'); catch OSError (permission/exec format errors) and compare stderr/stdout from subprocess"
+  },
+  {
+    "check_id": "hermes_z_flag_support",
+    "category": "hermes_contract",
+    "severity": "critical",
+    "what_it_checks": "Whether hermes binary supports the -z oneshot prompt flag (not an older version that lacks -z, or a wrapper that doesn't forward it)",
+    "failure_symptom": "Subprocess returns exitcode non-zero with stderr containing 'unrecognized arguments' or 'unknown option', or stderr contains usage/help text mentioning no -z flag",
+    "likely_causes": [
+      "Hermes version too old (pre-0.14.x) which didn't have -z flag",
+      "Wrapper script in PATH shadows real hermes and doesn't forward -z",
+      "Hermes installation incomplete or rolled back",
+      "User alias/shell function overrides hermes with custom script"
+    ],
+    "fix_steps": [
+      "Check Hermes version: hermes --version should show 0.14.x or later",
+      "If too old, upgrade: run package manager update or Hermes bootstrap",
+      "Check which hermes resolves to: which hermes - should be the real binary/script, not a user alias",
+      "Verify no shell aliases: unalias hermes; which hermes (should show true path)",
+      "Test -z directly: echo 'return 1+1' | hermes -z (should print 2, not error)",
+      "If wrapper issue, rename or delete the wrapper and use real hermes path"
+    ],
+    "change_robust": "Detection runs actual hermes -z command and checks output, not static version strings. Detects wrapper/alias shadowing at runtime.",
+    "detection_method": "Run HermesSubprocessLlm().complete('return 1+1'); check if output is '2' (valid Python eval) vs error like 'unrecognized arguments: -z'"
+  },
+  {
+    "check_id": "hermes_timeout_configured",
+    "category": "config",
+    "severity": "high",
+    "what_it_checks": "Whether CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT env var (if set) is numeric and positive",
+    "failure_symptom": "Handler returns {ok: false, error: 'ValueError', message: 'CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT must be numeric|greater than zero'} at plugin invocation",
+    "likely_causes": [
+      "CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT set to non-numeric value (e.g., '30s', 'infinity')",
+      "CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT set to 0 or negative number",
+      "Env var contains whitespace or stray characters (e.g., '120 ') - usually ok, but exotic shells may not strip",
+      "User .env or shell profile has malformed export"
+    ],
+    "fix_steps": [
+      "Check current value: echo $CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT",
+      "If unset, nothing to fix (defaults to 120 seconds)",
+      "If set, verify numeric: must be a float like 120, 300.5, 60.0",
+      "Remove invalid suffix: '30s' -> '30', 'infinity' -> '600' (large value)",
+      "Ensure positive: if value <= 0, change to reasonable value like 120 or 300",
+      "Update shell profile/env file and reload shell or use: export CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT=120"
+    ],
+    "change_robust": "Detection parses env var directly and validates type/range in code. Stays valid across any env setup method.",
+    "detection_method": "Call plugin._timeout_from_env(); if ValueError thrown with message containing 'numeric' or 'greater than zero', timeout config is invalid"
+  },
+  {
+    "check_id": "hermes_json_output_parseable",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "Whether hermes -z returns valid JSON-serializable output when asked for structured response (schema provided); detects non-JSON output, malformed JSON, or JSON that is not an object",
+    "failure_symptom": "Handler returns {ok: false, error: 'ConsensusProtocolError', message: 'Hermes structured output was not valid JSON after one retry: ...'} or 'returned JSON that is not an object'",
+    "likely_causes": [
+      "Hermes model hallucinates or adds Markdown code fences around JSON (code fence stripping fails if nested/malformed)",
+      "Hermes returns commentary/preamble before JSON object (JSON parser fails, retry instruction ignored)",
+      "Hermes returns JSON array or primitive instead of object: [1,2,3] or '\"string\"' instead of {...}",
+      "Hermes timeout causes truncated/invalid JSON output",
+      "Hermes model is not Claude or a model trained on structured outputs; may refuse or produce prose"
+    ],
+    "fix_steps": [
+      "Check Hermes model setting: echo $CLUXION_EFFORT_ULTRACODE_HERMES_MODEL (if set)",
+      "Verify Hermes is configured with Claude model (default via hermes -z); test: echo 'return json.dumps({\"test\": \"ok\"})' | hermes -z",
+      "If output is not valid JSON, check Hermes config: hermes --config or ~/.hermes/config.yaml for model selection",
+      "If model is not Claude, reconfigure: hermes config set model <valid-model> or check ANTHROPIC_API_KEY is set",
+      "Test structured prompt directly: hermes -z 'Return JSON object {\"key\": \"value\"}' - should return clean JSON, not prose",
+      "If wrapper/override in place, verify CLUXION_EFFORT_ULTRACODE_HERMES_MODEL points to valid model: CLUXION_EFFORT_ULTRACODE_HERMES_MODEL=claude-3-5-sonnet export"
+    ],
+    "change_robust": "Detection runs actual hermes -z with schema and validates JSON parse output. Catches model output issues, not static config. Robust to hermes version/model changes.",
+    "detection_method": "Call HermesSubprocessLlm().complete(prompt, schema={...}); if ConsensusProtocolError raised with message containing 'not valid JSON after one retry' or 'returned JSON that is not an object', JSON parsing failed after retries"
+  },
+  {
+    "check_id": "consensus_schema_contract",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "Whether plugin.CONSENSUS_SCHEMA matches the contract that Hermes register_tool() expects: name, description, parameters with required/properties",
+    "failure_symptom": "Hermes plugin loading fails with contract validation error, or tool does not appear in Hermes tool list, or tool invocation fails with 'required parameter question missing'",
+    "likely_causes": [
+      "Plugin version mismatch: schema updated in plugin but Hermes contract/loader expects old schema",
+      "CONSENSUS_SCHEMA hardcoded defaults changed (e.g., 'rounds' default changed from 3 to 5)",
+      "register_tool() signature changed in host Hermes (new required parameter not provided)",
+      "Plugin not installed or reloaded after update (old .pyc or venv cache)",
+      "toolset name changed ('ultracode' vs 'consensus' vs something else)"
+    ],
+    "fix_steps": [
+      "Check plugin version: python3 -c 'from cluxion_effort_ultracode import __version__; print(__version__)'",
+      "Verify schema in source: grep -A 50 'CONSENSUS_SCHEMA' src/cluxion_effort_ultracode/plugin.py - should show name, description, parameters",
+      "Confirm required fields: schema['parameters']['required'] should include 'question'",
+      "Reload plugin: if in venv, reinstall: pip install -e . --force-reinstall",
+      "Check Hermes compat: hermes --list-plugins should show cluxion-agentplugin-effort-ultracode, hermes tool list should show cluxion_consensus",
+      "If register_tool contract changed, check Hermes version: hermes --version should match plugin README requirements (usually 0.14+)"
+    ],
+    "change_robust": "Detection inspects actual CONSENSUS_SCHEMA constant at runtime and validates structure. Detects schema drift between plugin versions and Hermes contract expectations.",
+    "detection_method": "Call plugin.register(ctx) where ctx records register_tool() calls; inspect ctx.tools[0]['schema'] and verify keys: name='cluxion_consensus', description is non-empty, parameters is dict with 'required' and 'properties', 'question' is in required and properties"
+  },
+  {
+    "check_id": "llm_factory_callable",
+    "category": "config",
+    "severity": "high",
+    "what_it_checks": "Whether the llm_factory passed to build_consensus_handler() is callable and returns an object with a .complete() method",
+    "failure_symptom": "Handler returns {ok: false, error: 'ValueError', message: 'llm_factory must be callable|must return an object with complete(...)'} at plugin invocation",
+    "likely_causes": [
+      "build_consensus_handler() called with non-callable llm_factory (e.g., llm_factory=None or llm_factory='not_a_function')",
+      "llm_factory is callable but returns object without .complete() method",
+      "Handler uses default _default_llm if llm_factory not provided, but default_llm depends on hermes binary availability",
+      "Hermes adapter created but .complete() method signature changed or missing"
+    ],
+    "fix_steps": [
+      "Verify llm_factory passed to build_consensus_handler() is a callable: type(llm_factory).__name__ should be 'function' or 'type'",
+      "Test llm_factory directly: result = llm_factory(); hasattr(result, 'complete') should be True",
+      "If using custom LLM adapter, ensure .complete(prompt, *, schema=None) method exists with correct signature",
+      "If using default (build_consensus_handler() with no args), ensure hermes binary is available (see hermes_binary_available check)",
+      "Verify hermes -z works: hermes -z 'return 1+1' should print 2"
+    ],
+    "change_robust": "Detection invokes llm_factory at runtime and checks .complete() existence, not static inspection. Detects missing/broken adapters at execution time.",
+    "detection_method": "Call plugin.build_consensus_handler(llm_factory); invoke handler with valid args; if ValueError raised with message 'llm_factory must be callable' or 'must return an object with complete(...)', factory contract broken"
+  },
+  {
+    "check_id": "agent_position_required_fields",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "Whether LLM responses include all required fields for AgentPosition: stance, rationale, evidence, confidence; also checks types (stance/rationale are non-empty strings, evidence is non-empty list of strings, confidence is numeric)",
+    "failure_symptom": "Handler returns {ok: false, error: 'ConsensusProtocolError', message: 'agent-N response missing required fields ...'} at plugin invocation during round 0",
+    "likely_causes": [
+      "LLM model returns incomplete JSON object (missing 'stance', 'evidence', etc.)",
+      "LLM returns misspelled keys ('Stance' instead of 'stance')",
+      "evidence is empty list [] (LLM says 'no evidence')",
+      "confidence is string '0.8' instead of float 0.8",
+      "rationale or stance is empty string or whitespace-only",
+      "LLM returns non-JSON string when schema is provided (JSON parse fails but error not clear)"
+    ],
+    "fix_steps": [
+      "Test LLM directly with POSITION_SCHEMA: hermes -z 'Return JSON with stance, rationale, evidence list, confidence' should return valid AgentPosition",
+      "Verify field names in response: JSON keys must be exactly 'stance', 'rationale', 'evidence', 'confidence' (case-sensitive)",
+      "Check evidence is non-empty list: evidence should be array with at least one string, e.g. ['Evidence for stance']",
+      "Verify confidence is numeric: should be number like 0.75, not string '0.75'",
+      "Check rationale and stance are non-empty: must have non-whitespace text",
+      "If using custom LLM adapter, verify it returns dict matching POSITION_SCHEMA, not a string"
+    ],
+    "change_robust": "Detection validates actual LLM response structure at runtime via AgentPosition parsing. Detects schema drift from LLM model changes or prompt misalignment.",
+    "detection_method": "Run ConsensusEngine.decide(); if ConsensusProtocolError raised with message 'response missing required fields: ...' or 'evidence must be a list of strings|include at least one non-empty item|confidence must be numeric', position validation failed"
+  },
+  {
+    "check_id": "debate_round_concession_validity",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "Whether debate round (round >= 1) responses have valid debate structure: conceded and maintained must be lists of {point, reason} objects; if stance changes, at least one point must be conceded; any debate point must have non-empty reason",
+    "failure_symptom": "Handler returns {ok: false, error: 'ConsensusProtocolError', message: 'agent-N must either concede specific points or maintain|changed stance without conceding a specific point and reason'} during debate round",
+    "likely_causes": [
+      "LLM returns empty conceded[] and empty maintained[] (no debate movement)",
+      "LLM returns debate points with empty reason field: {'point': 'X', 'reason': ''}",
+      "LLM changes stance but doesn't concede any points (violates protocol)",
+      "LLM returns conceded/maintained as non-list (string, object, etc.)",
+      "LLM returns debate point items that are not objects (strings, numbers)",
+      "Round 0 response (independent positions) incorrectly includes conceded/maintained fields"
+    ],
+    "fix_steps": [
+      "Test DEBATE_SCHEMA directly: hermes -z with schema prompt should return object with conceded/maintained arrays",
+      "Verify conceded and maintained are non-empty lists if stance changes: if stance differs from prior round, conceded must have at least one {point: '...', reason: '...'}",
+      "Check reason fields are non-empty strings: reason: '' is invalid, must be reason: 'Reason why conceding/maintaining'",
+      "If round 0 (independent round), ensure no conceded/maintained in response (only stance, rationale, evidence, confidence)",
+      "Test debate prompt: ensure LLM sees prior positions clearly and is asked to concede/maintain with reasons",
+      "If LLM avoids taking positions, use stronger prompt: 'You MUST either concede or maintain specific points, not just general agreement'"
+    ],
+    "change_robust": "Detection validates debate point structure and concession rules at runtime during debate round execution. Detects LLM protocol violations or prompt ambiguities.",
+    "detection_method": "Run ConsensusEngine.decide() with max_rounds >= 1; if ConsensusProtocolError raised with message 'must either concede specific points or maintain|without a reason|changed stance without conceding', debate validation failed"
+  },
+  {
+    "check_id": "debate_round_response_type",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "Whether debate round response is either a dict/Mapping or a valid JSON string that can be parsed into a dict; detects non-JSON strings or non-dict types",
+    "failure_symptom": "Handler returns {ok: false, error: 'ConsensusProtocolError', message: 'agent-N returned non-JSON text for structured output|returned JSON that is not an object|returned unsupported response type'} during debate round",
+    "likely_causes": [
+      "LLM returns plain text prose instead of JSON (e.g., 'I agree with agent-2...')",
+      "LLM returns JSON array instead of object: [{...}] or ['A', 'B']",
+      "LLM returns JSON primitive: 123, 'string', true, null",
+      "Hermes -z retry mechanism exhausted (first attempt non-JSON, retry also non-JSON)",
+      "LLM wraps JSON in extra commentary that is not stripped by code-fence handler"
+    ],
+    "fix_steps": [
+      "Test LLM with DEBATE_SCHEMA: hermes -z 'Return ONLY JSON object matching schema' should return dict-like structure, not prose or array",
+      "Verify Hermes structured mode is working: echo 'return json.dumps({\"test\": \"ok\"})' | hermes -z should return clean JSON",
+      "If JSON is wrapped in code fences with preamble, check _strip_code_fence: should remove markdown ```json ... ``` but not plain prose",
+      "Test retry message: Hermes is given a retry instruction after first failure, should be stricter: 'Return ONLY raw JSON. No Markdown fences, no commentary, no prose.'",
+      "If LLM keeps returning prose, check if model is Claude (claude-3-5-sonnet, etc.) - non-Claude models may not follow JSON-only instructions"
+    ],
+    "change_robust": "Detection parses actual LLM response and validates JSON type at runtime. Detects LLM non-compliance with structured output instructions.",
+    "detection_method": "Run ConsensusEngine.decide() with max_rounds >= 1; if ConsensusProtocolError raised with message 'returned non-JSON text for structured output|returned unsupported response type', response parsing failed"
+  },
+  {
+    "check_id": "consensus_result_valid",
+    "category": "runtime",
+    "severity": "medium",
+    "what_it_checks": "Whether consensus engine produces valid ConsensusResult with correct status, decision, and dissent fields based on unanimity check outcome",
+    "failure_symptom": "Plugin returns result with status='unanimous' but decision=None, or status='no_consensus' but dissent is empty, or result cannot be serialized to JSON (e.g., contains non-JSON-serializable objects)",
+    "likely_causes": [
+      "Consensus engine has logic bug (unanimity check result doesn't match result construction)",
+      "normalize_stance() returns empty string for all stances (edge case in Unicode normalization)",
+      "Result serialization (asdict(result)) includes non-JSON types (custom objects, datetime, etc.)",
+      "ConsensusResult dataclass definition changed and fields are missing or renamed"
+    ],
+    "fix_steps": [
+      "Verify engine unanimity logic: if _is_unanimous(positions) returns True, then consensus.status must be 'unanimous' and decision must equal positions[0].stance",
+      "Test normalize_stance: python3 -c 'from cluxion_effort_ultracode.core.consensus import normalize_stance; print(normalize_stance(\"test\"))'",
+      "Check ConsensusResult fields: python3 -c 'from cluxion_effort_ultracode.core.types import ConsensusResult; print(ConsensusResult.__dataclass_fields__.keys())'",
+      "Test JSON serialization: python3 -c 'from dataclasses import asdict; import json; json.dumps(asdict(result))' should not raise TypeError",
+      "Verify AgentPosition, DebatePoint, Dissent all have JSON-serializable fields (no custom objects)"
+    ],
+    "change_robust": "Detection validates result invariants at runtime after engine execution. Detects logic bugs or dataclass evolution issues.",
+    "detection_method": "Run ConsensusEngine.decide(); inspect returned ConsensusResult. If status='unanimous', decision should be non-empty string and dissent should be empty list. If status='no_consensus', decision should be None and dissent should be non-empty. If either invariant violated, result is malformed"
+  },
+  {
+    "check_id": "debate_non_termination_cost",
+    "category": "concurrency",
+    "severity": "medium",
+    "what_it_checks": "Whether debate rounds might loop indefinitely or exceed reasonable cost bounds; specifically checks that consensus engine terminates within max_rounds and counts LLM calls (worst case: agents * (rounds + 1) calls)",
+    "failure_symptom": "Plugin execution takes unexpectedly long, or cost of hermes -z calls is very high (user can see by checking Anthropic API usage for many small requests). No hard failure, but degraded performance.",
+    "likely_causes": [
+      "max_rounds set to very large value (e.g., 10 or 100) by caller",
+      "agents_count set very high (e.g., 10 agents)",
+      "LLM keeps producing marginally different stances that don't normalize to unanimous (but also don't fail validation)",
+      "Debate continues without any agent conceding (all agents maintain all points forever)",
+      "No built-in cost limit (only termination on max_rounds or unanimity)"
+    ],
+    "fix_steps": [
+      "Check default params: agents=3, max_rounds=3 means worst case 12 calls. Verify caller doesn't override to higher values.",
+      "Monitor actual rounds: ConsensusResult.rounds should be <= max_rounds. If equal, debate ran full length without unanimity.",
+      "If high cost observed, lower max_rounds in handler call: plugin.build_consensus_handler() -> handler({..., rounds=1})",
+      "If agents > 3, reduce: plugin.build_consensus_handler() -> handler({..., agents=2})",
+      "Check if LLM is in a loop (same stances every round): log transcript to see if positions are changing. If static, unanimity should be reached or max_rounds limit should trigger.",
+      "Add runtime cost limit if needed (future enhancement): abort if total_calls > threshold"
+    ],
+    "change_robust": "Detection counts actual rounds in ConsensusResult.transcript and validates against max_rounds. Stays valid across future changes to debate logic.",
+    "detection_method": "Track len(ConsensusResult.transcript) and agent count. Cost = agents * (max_rounds + 1). If actual rounds exceed max_rounds, or if LLM call count would be > 12 for default settings, log cost warning. Verify with manual round count."
+  },
+  {
+    "check_id": "plugin_registration_host_compat",
+    "category": "config",
+    "severity": "low",
+    "what_it_checks": "Whether plugin.register(ctx) can be called with a host context that may or may not have register_tool method; ensures graceful degradation if host is not Hermes-like",
+    "failure_symptom": "Plugin loading fails with AttributeError or TypeError when host context doesn't have register_tool or when it's not callable",
+    "likely_causes": [
+      "Host context doesn't implement register_tool method (not Hermes-like)",
+      "register_tool exists but is not a callable (e.g., attribute is a string or property)",
+      "Plugin assumes all hosts support register_tool (not defensive)"
+    ],
+    "fix_steps": [
+      "Check host context interface: if using non-Hermes host, ensure it either has register_tool(name, toolset, schema, handler, ...) method or plugin.register() is never called",
+      "If host has register_tool, verify it's callable: callable(ctx.register_tool) should be True",
+      "If host doesn't support plugins, plugin.register(ctx) should gracefully return (no error, tool just not registered)",
+      "Test defensive registration: python3 -c 'from cluxion_effort_ultracode.plugin import register; register(object())' should not raise exception"
+    ],
+    "change_robust": "Detection tests actual plugin.register() behavior with various host contexts. Ensures portable plugin code.",
+    "detection_method": "Call plugin.register(ctx) where ctx is missing register_tool method. Should not raise exception. Then call register(ctx) where ctx.register_tool is non-callable. Should not raise exception."
+  },
+  {
+    "check_id": "hermes_subprocess_returncode_nonzero",
+    "category": "hermes_contract",
+    "severity": "high",
+    "what_it_checks": "Whether hermes -z subprocess exits with code 0; if non-zero, indicates Hermes LLM error, timeout, or crash",
+    "failure_symptom": "Handler returns {ok: false, error: 'ConsensusProtocolError', message: 'hermes -z exited with code [1|2|...]: [stderr details]'} at plugin invocation",
+    "likely_causes": [
+      "Hermes LLM call failed (e.g., API key invalid, model unavailable, network error)",
+      "Hermes subprocess crashed (segfault, panic, Python exception)",
+      "Hermes command-line args are invalid for this version",
+      "hermes -z with --model specifies non-existent or inaccessible model",
+      "Hermes configuration is broken (config.yaml missing or malformed)"
+    ],
+    "fix_steps": [
+      "Test hermes -z directly: hermes -z 'return 1+1' should print '2' and exit 0",
+      "If error, check stderr: hermes -z 'return 1+1' 2>&1 | cat to see exact error message",
+      "Verify Hermes config: hermes config show or cat ~/.hermes/config.yaml - should show valid model and API key",
+      "Check Hermes model is accessible: hermes --models or similar to list available models",
+      "If using CLUXION_EFFORT_ULTRACODE_HERMES_MODEL override, verify model exists: hermes --models | grep $CLUXION_EFFORT_ULTRACODE_HERMES_MODEL",
+      "Check API key: if using Claude via Anthropic API, ANTHROPIC_API_KEY must be set and valid",
+      "Increase timeout if Hermes is slow: CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT=300 (5 minutes)"
+    ],
+    "change_robust": "Detection checks actual subprocess exitcode from hermes -z call. Detects runtime Hermes failures including API, config, and environment issues.",
+    "detection_method": "Run HermesSubprocessLlm().complete(...); inspect subprocess.run() result. If returncode != 0, subprocess raised error (caught and re-raised as ConsensusProtocolError with message 'hermes -z exited with code N: ...')"
+  },
+  {
+    "check_id": "hermes_subprocess_timeout_triggered",
+    "category": "concurrency",
+    "severity": "high",
+    "what_it_checks": "Whether hermes -z subprocess times out after CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT seconds",
+    "failure_symptom": "Handler returns {ok: false, error: 'ConsensusProtocolError', message: 'hermes -z timed out after [N] seconds'} at plugin invocation",
+    "likely_causes": [
+      "Hermes model is slow (large prompt, complex reasoning, overloaded API)",
+      "Network latency high (API call takes time)",
+      "CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT too short for prompt complexity (default 120s may be tight)",
+      "System under heavy load (hermes process starved of CPU)",
+      "Hermes API backend is degraded or offline"
+    ],
+    "fix_steps": [
+      "Increase timeout: export CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT=300 (or higher)",
+      "Test single hermes -z call latency: time hermes -z 'return 1+1' to measure baseline",
+      "Check system load: top or similar - if CPU/memory maxed, hermes may be slow",
+      "Simplify prompts: if debate prompts are very long, reduce context or evidence length",
+      "Check Hermes API status: if using Anthropic API, verify API is responsive (try direct API call or hermes --check-api)",
+      "Profile consensus loop: add logging to see which agent/round is slowest, may help identify bottleneck"
+    ],
+    "change_robust": "Detection monitors actual subprocess timeout via subprocess.run(timeout=...) parameter. Detects performance issues at runtime.",
+    "detection_method": "Run HermesSubprocessLlm().complete(...); if subprocess.TimeoutExpired is raised (timeout_seconds exceeded), caught and re-raised as ConsensusProtocolError with message 'hermes -z timed out after [N] seconds'"
+  },
+  {
+    "check_id": "llm_port_complete_method_signature",
+    "category": "native_backend",
+    "severity": "high",
+    "what_it_checks": "Whether LLM adapter's .complete() method has correct signature: complete(prompt: str, *, schema: Mapping[str, Any] | None = None) -> Mapping[str, Any] | str",
+    "failure_symptom": "TypeError or AttributeError during engine._initial_positions() or engine._debate_round() call, indicating complete() signature mismatch or LLM object missing complete method",
+    "likely_causes": [
+      "Custom LLM adapter complete() method doesn't accept **kwargs (llm.complete() called with schema kwarg, but method doesn't accept it)",
+      "complete() has wrong parameter name (e.g., 'prompt_text' instead of 'prompt')",
+      "complete() is not a method but an attribute (e.g., lambda function assigned to class instance)",
+      "LLM object is None or not an object with .complete() method"
+    ],
+    "fix_steps": [
+      "Verify LLM class has complete() method: inspect(llm.__class__).methods or hasattr(llm, 'complete')",
+      "Check method signature: inspect.signature(llm.complete) should show (prompt, *, schema=None) or compatible",
+      "Test calling complete directly: llm.complete('test', schema=None) should work without error",
+      "If custom adapter, ensure method signature matches LlmPort protocol: complete(self, prompt: str, *, schema: Mapping[str, Any] | None = None) -> Mapping[str, Any] | str",
+      "If using HermesSubprocessLlm, verify it's instantiated correctly: HermesSubprocessLlm() or HermesSubprocessLlm(binary='hermes', timeout_seconds=120, model=None)"
+    ],
+    "change_robust": "Detection runs engine with actual LLM and validates method calls work. Detects signature mismatches and protocol violations at runtime.",
+    "detection_method": "Call ConsensusEngine(llm, ...).decide(...) where llm.complete() has wrong signature. If TypeError or AttributeError raised during call, signature mismatch detected."
+  }
+]

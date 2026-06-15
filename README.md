@@ -1,25 +1,109 @@
-# cluxion-Agentplugin-Effort-Ultracode
+========= Written in Korean first, then English ==========
 
-Portable multi-agent "ultracode" orchestration whose headline feature is a **3-agent
-adversarial debate that converges to unanimous consensus**: three agents argue from evidence
-and reasons, concede points that are better-argued, and only a unanimous agreement becomes the
-decision.
+======== 한국어 ========
 
-v0.1 provides:
+# cluxion-agentplugin-effort-ultracode
 
-- host-agnostic `ConsensusEngine`
-- core-owned dataclasses and ports
-- deterministic code-level convergence checks
-- concession-with-reason enforcement
-- honest `no_consensus` results with dissent
-- a callable reference adapter
-- a thin Hermes `cluxion_consensus` registration shim
-- `cluxion-ultracode consensus` with deterministic mock adapters
+AI 에이전트(Hermes Agent, Claude Code, Codex)를 위한 합의 의사결정 플러그인입니다. 핵심 기능은
+**3개 에이전트의 적대적 토론**입니다: 세 에이전트가 근거와 이유로 서로를 설득하고, 더 잘 논증된
+주장은 이유와 함께 수용하며, **만장일치에 이르렀을 때에만** 그 결정을 채택합니다. 합의에 이르지
+못하면 반대 의견과 함께 정직하게 `no_consensus`를 반환합니다. 수렴 판정은 모델이 아니라 결정론적
+코드가 통제합니다.
 
-Example:
+## 설치
 
 ```bash
-cluxion-ultracode consensus --question "Should we adopt the proposal?" --adapter mock-unanimous
+pip install cluxion-agentplugin-effort-ultracode
 ```
 
-The broader Ultracode workflow runtime is intentionally deferred; see `DESIGN.md`.
+### Hermes Agent에서 사용
+
+`~/.hermes/config.yaml` 에 추가한 뒤 Hermes를 재시작하세요.
+
+```yaml
+plugins:
+  enabled:
+    - cluxion-agentplugin-effort-ultracode
+```
+
+Hermes를 통해 제공되는 로컬 모델(vLLM/MLX)에서도 동일하게 동작합니다.
+
+## 사용
+
+Hermes에서는 `cluxion_consensus` 도구로 제공됩니다. CLI로 직접 실행할 수도 있습니다.
+
+```bash
+cluxion-ultracode consensus --question "이 제안을 채택할까?"
+```
+
+만장일치면 결정과 근거를, 아니면 반대 의견을 포함한 `no_consensus`를 반환합니다.
+
+## 점검
+
+설치·Hermes 계약·LLM 백엔드 상태를 결정론적으로 자가 진단합니다. 같은 상태면 항상 같은 결과를
+출력하고, 문제가 있으면 증상과 해결 단계를 그대로 알려줍니다.
+
+```bash
+cluxion-ultracode doctor          # 사람용 요약
+cluxion-ultracode doctor --json   # 구조화 출력
+```
+
+Hermes 안에서는 `ultracode_doctor` 도구로도 노출됩니다.
+
+## 라이선스
+
+Apache-2.0
+
+============ English ==========
+
+# cluxion-agentplugin-effort-ultracode
+
+A consensus decision plugin for AI agents (Hermes Agent, Claude Code, Codex). Its headline
+feature is a **3-agent adversarial debate**: three agents argue from evidence and reasons,
+concede points that are better-argued (with a stated reason), and only a **unanimous**
+agreement becomes the decision. If they cannot agree, it returns an honest `no_consensus` with
+the dissent. Convergence is controlled by deterministic code, not by the model.
+
+## Install
+
+```bash
+pip install cluxion-agentplugin-effort-ultracode
+```
+
+### Use with Hermes Agent
+
+Add it to `~/.hermes/config.yaml`, then restart Hermes:
+
+```yaml
+plugins:
+  enabled:
+    - cluxion-agentplugin-effort-ultracode
+```
+
+It works the same with local models (vLLM/MLX) served through Hermes.
+
+## Use
+
+In Hermes it is available as the `cluxion_consensus` tool. You can also run it from the CLI:
+
+```bash
+cluxion-ultracode consensus --question "Should we adopt the proposal?"
+```
+
+On unanimity it returns the decision and rationale; otherwise a `no_consensus` with the dissent.
+
+## Diagnostics
+
+A deterministic self-check of install, the Hermes contract, and the LLM backend. The same state
+always prints the same result, and on any problem it shows the symptom and the exact fix steps.
+
+```bash
+cluxion-ultracode doctor          # human summary
+cluxion-ultracode doctor --json   # structured output
+```
+
+Also exposed inside Hermes as the `ultracode_doctor` tool.
+
+## License
+
+Apache-2.0

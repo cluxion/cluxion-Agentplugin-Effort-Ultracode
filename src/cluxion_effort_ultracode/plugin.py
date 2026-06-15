@@ -11,6 +11,10 @@ from typing import Any
 from cluxion_effort_ultracode.adapters.hermes_llm import HermesExecutableNotFoundError, HermesSubprocessLlm
 from cluxion_effort_ultracode.core import ConsensusEngine, ConsensusProtocolError
 from cluxion_effort_ultracode.core.ports import LlmPort
+import importlib.resources
+import json
+from pathlib import Path
+from cluxion_effort_ultracode.doctor import render_json, run_doctor
 
 CONSENSUS_SCHEMA: dict[str, Any] = {
     "name": "cluxion_consensus",
@@ -62,6 +66,23 @@ def register(ctx: object) -> None:
         schema=CONSENSUS_SCHEMA,
         handler=build_consensus_handler(),
         emoji="🧠",
+    )
+    # doctor tool
+    DOCTOR_SCHEMA = {
+        "name": "ultracode_doctor",
+        "description": "Run the embedded deterministic health checks for this plugin",
+        "parameters": {
+            "type": "object",
+            "properties": {"verbose": {"type": "boolean"}},
+            "additionalProperties": False,
+        },
+    }
+    register_tool(
+        name="ultracode_doctor",
+        toolset="ultracode",
+        schema=DOCTOR_SCHEMA,
+        handler=lambda args, **kw: _json_result(lambda: _handle_doctor(args, **kw)),
+        emoji="🩺",
     )
 
 
@@ -156,6 +177,30 @@ def _int_arg(args: Mapping[str, object], key: str, *, default: int) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} must be an integer") from exc
+
+
+def _handle_doctor(args: dict[str, object], **_: object) -> str:
+    verbose = bool(args.get("verbose", False))
+    pkg = "cluxion_effort_ultracode.doctor"
+    catalog_path = Path(str(importlib.resources.files(pkg).joinpath("catalog.json")))
+    result = run_doctor(
+        cwd=Path.cwd(),
+        hermes_bin="hermes",
+        catalog_path=catalog_path,
+        probes=__import__(
+            "cluxion_effort_ultracode.doctor.probes", fromlist=["PROBES"]
+        ).PROBES,
+        plugin="effort-ultracode",
+        version=__import__("cluxion_effort_ultracode").__version__,
+    )
+    return render_json(result)
+
+
+def _json_result(callback):
+    try:
+        return callback()
+    except Exception as exc:
+        return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, sort_keys=True)
 
 
 __all__ = ["CONSENSUS_SCHEMA", "build_consensus_handler", "register"]
