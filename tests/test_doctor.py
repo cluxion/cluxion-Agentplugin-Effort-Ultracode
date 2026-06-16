@@ -1,5 +1,7 @@
 """Tests for embedded doctor (determinism + cross-cutting checks)."""
 
+import json
+import subprocess
 from pathlib import Path
 
 from cluxion_effort_ultracode.doctor import (
@@ -7,6 +9,7 @@ from cluxion_effort_ultracode.doctor import (
     render_json,
     run_doctor,
 )
+from cluxion_effort_ultracode.doctor.framework import DoctorContext
 from cluxion_effort_ultracode.doctor.probes import PROBES
 
 
@@ -15,6 +18,13 @@ def _catalog_path() -> Path:
 
     pkg = "cluxion_effort_ultracode.doctor"
     return Path(str(importlib.resources.files(pkg).joinpath("catalog.json")))
+
+
+def _doctor_ctx() -> DoctorContext:
+    def _dummy_run(cmd):
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    return DoctorContext(Path.cwd(), "hermes", _dummy_run)
 
 
 def test_run_doctor_returns_result_and_deterministic():
@@ -37,7 +47,6 @@ def test_run_doctor_returns_result_and_deterministic():
     )
     j2 = render_json(r2)
     assert j1 == j2  # byte identical
-    # sorted by severity then id
     ids = [c.check_id for c in r1.checks]
     assert len(ids) > 0
 
@@ -73,40 +82,90 @@ def test_probe_exception_becomes_fail():
 
 
 def test_warn_only_is_ok():
-    # construct a result with only warn (no fail)
     from cluxion_effort_ultracode.doctor.framework import CheckResult, DoctorResult
 
-    checks = (
-        CheckResult(check_id="x", category="c", severity="medium", status="warn", detail="w"),
-    )
+    checks = (CheckResult(check_id="x", category="c", severity="medium", status="warn", detail="w"),)
     r = DoctorResult(plugin="p", version="0.1.4", checks=checks)
     assert r.ok is True
+    assert r.summary == "ok"
 
 
-def test_new_deterministic_probes_non_skip():
-    import subprocess
-    from pathlib import Path
+def test_critical_skip_marks_degraded_summary():
+    cat = _catalog_path()
+    partial = {k: v for k, v in PROBES.items() if k != "hermes_binary_available"}
+    result = run_doctor(
+        cwd=Path.cwd(),
+        catalog_path=cat,
+        probes=partial,
+        plugin="effort-ultracode",
+        version="0.1.4",
+    )
+    statuses = {c.check_id: c.status for c in result.checks}
+    assert statuses["hermes_binary_available"] == "skip"
+    assert result.summary == "degraded"
+    assert result.ok is False
+    payload = json.loads(render_json(result))
+    assert payload["summary"] == "degraded"
+    assert payload["ok"] is False
 
-    from cluxion_effort_ultracode.doctor.framework import DoctorContext
 
-    def _dummy_run(cmd):
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+def test_hermes_static_critical_probes_registered():
+    for name in ("hermes_binary_available", "hermes_z_flag_support"):
+        assert name in PROBES
+    assert "hermes_subprocess_launchable" not in PROBES
 
-    ctx = DoctorContext(Path.cwd(), "hermes", _dummy_run)
-    new_probes = [
-        "import_availability",
-        "abi3_wheel_compatible",
-        "sqlite_wal_mode_compatible",
-        "json_serialization_deterministic",
-        "hermes_plugin_enabled",
-        "env_var_consistency",
+
+def test_hermes_z_flag_support_parses_help(monkeypatch):
+    def _help_run(cmd):
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout="usage: hermes [-z] [--oneshot PROMPT]",
+            stderr="",
+        )
+
+    ctx = DoctorContext(Path.cwd(), "hermes", _help_run)
+    status, detail = PROBES["hermes_z_flag_support"](ctx)
+    assert status == "pass"
+    assert detail == "present"
+
+
+def test_static_probes_do_not_skip():
+    ctx = _doctor_ctx()
+    static_probes = (
+        "consensus_schema_contract",
+        "hermes_binary_available",
         "hermes_timeout_configured",
+        "llm_factory_callable",
         "plugin_registration_host_compat",
-    ]
-    non_skip = 0
-    for name in new_probes:
-        if name in PROBES:
-            status, _ = PROBES[name](ctx)
-            if status != "skip":
-                non_skip += 1
-    assert non_skip >= 2, f"only {non_skip} returned non-skip"
+    )
+    for name in static_probes:
+        assert name in PROBES
+        status, _ = PROBES[name](ctx)
+        assert status != "skip", f"{name} should not skip"
+
+
+def test_consensus_schema_contract_detects_missing_question(monkeypatch):
+    from cluxion_effort_ultracode import plugin
+
+    broken = dict(plugin.CONSENSUS_SCHEMA)
+    params = dict(broken["parameters"])
+    params["required"] = []
+    broken["parameters"] = params
+    monkeypatch.setattr(plugin, "CONSENSUS_SCHEMA", broken)
+
+    status, detail = PROBES["consensus_schema_contract"](_doctor_ctx())
+    assert status == "fail"
+    assert "required" in detail
+
+
+def test_hermes_timeout_configured_rejects_invalid(monkeypatch):
+    monkeypatch.setenv("CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT", "not-a-number")
+    status, detail = PROBES["hermes_timeout_configured"](_doctor_ctx())
+    assert status == "fail"
+    assert "non-numeric" in detail
+
+
+def test_dead_probes_removed():
+    for dead in ("abi3_wheel_compatible", "sqlite_wal_mode_compatible", "import_availability"):
+        assert dead not in PROBES

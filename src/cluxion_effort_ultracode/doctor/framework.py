@@ -17,6 +17,7 @@ SEVERITY_RANK: dict[str, int] = {
     "info": 4,
 }
 
+
 @dataclass(frozen=True)
 class CatalogEntry:
     check_id: str
@@ -28,6 +29,7 @@ class CatalogEntry:
     fix_steps: tuple[str, ...]
     change_robust: str
 
+
 @dataclass(frozen=True)
 class CheckResult:
     check_id: str
@@ -36,6 +38,7 @@ class CheckResult:
     status: str
     detail: str
 
+
 @dataclass(frozen=True)
 class DoctorResult:
     plugin: str
@@ -43,13 +46,22 @@ class DoctorResult:
     checks: tuple[CheckResult, ...]
 
     @property
+    def summary(self) -> str:
+        if any(c.status == "fail" for c in self.checks):
+            return "fail"
+        if any(c.severity == "critical" and c.status == "skip" for c in self.checks):
+            return "degraded"
+        return "ok"
+
+    @property
     def ok(self) -> bool:
-        return not any(c.status == "fail" for c in self.checks)
+        return self.summary == "ok"
 
     def to_json_object(self) -> dict[str, Any]:
         return {
             "plugin": self.plugin,
             "version": self.version,
+            "summary": self.summary,
             "checks": [
                 {
                     "check_id": c.check_id,
@@ -63,13 +75,13 @@ class DoctorResult:
             "ok": self.ok,
         }
 
+
 class DoctorContext:
-    def __init__(
-        self, cwd: Path, hermes_bin: str, run: Callable[[list[str]], subprocess.CompletedProcess]
-    ) -> None:
+    def __init__(self, cwd: Path, hermes_bin: str, run: Callable[[list[str]], subprocess.CompletedProcess]) -> None:
         self.cwd = cwd
         self.hermes_bin = hermes_bin
         self.run = run
+
 
 def load_catalog(catalog_path: Path) -> tuple[CatalogEntry, ...]:
     raw = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -98,6 +110,7 @@ def load_catalog(catalog_path: Path) -> tuple[CatalogEntry, ...]:
             entries.append(CatalogEntry(**data))  # type: ignore[arg-type]
     return tuple(entries)
 
+
 def _make_runner(timeout: float = 8.0) -> Callable[[list[str]], subprocess.CompletedProcess]:
     def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -109,6 +122,7 @@ def _make_runner(timeout: float = 8.0) -> Callable[[list[str]], subprocess.Compl
         )
 
     return _run
+
 
 def run_doctor(
     *,
@@ -142,16 +156,14 @@ def run_doctor(
     results.sort(key=lambda c: (SEVERITY_RANK.get(c.severity, 9), c.check_id))
     return DoctorResult(plugin=plugin, version=version, checks=tuple(results))
 
-def render_json(result: DoctorResult) -> str:
-    return json.dumps(
-        result.to_json_object(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    )
 
-def render_text(
-    result: DoctorResult, catalog: tuple[CatalogEntry, ...], *, verbose: bool = False
-) -> str:
+def render_json(result: DoctorResult) -> str:
+    return json.dumps(result.to_json_object(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def render_text(result: DoctorResult, catalog: tuple[CatalogEntry, ...], *, verbose: bool = False) -> str:
     entry_map = {e.check_id: e for e in catalog}
-    lines: list[str] = []
+    lines: list[str] = [f"summary: {result.summary}"]
     for c in result.checks:
         entry = entry_map.get(c.check_id)
         line = f"{c.status} [{c.severity}] {c.check_id}: {c.detail}"

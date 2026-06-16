@@ -185,9 +185,7 @@ def _handle_doctor(args: dict[str, object], **_: object) -> str:
         cwd=Path.cwd(),
         hermes_bin="hermes",
         catalog_path=catalog_path,
-        probes=__import__(
-            "cluxion_effort_ultracode.doctor.probes", fromlist=["PROBES"]
-        ).PROBES,
+        probes=__import__("cluxion_effort_ultracode.doctor.probes", fromlist=["PROBES"]).PROBES,
         plugin="effort-ultracode",
         version=__import__("cluxion_effort_ultracode").__version__,
     )

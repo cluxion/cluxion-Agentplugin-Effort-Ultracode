@@ -57,9 +57,12 @@ def _build_parser() -> argparse.ArgumentParser:
     consensus.add_argument("--agents", type=int, default=3, help="Number of agents, default 3")
     consensus.add_argument(
         "--adapter",
-        choices=["mock-unanimous", "mock-no-consensus"],
-        required=True,
-        help="LLM adapter to use. v0.1 ships deterministic mock adapters for local testing.",
+        choices=["hermes", "mock-unanimous", "mock-no-consensus"],
+        default="hermes",
+        help=(
+            "LLM adapter: hermes runs real hermes -z via the plugin default path; "
+            "mock-* adapters are deterministic for local testing."
+        ),
     )
     doctor = subparsers.add_parser("doctor", help="Run embedded health checks")
     doctor.add_argument("--json", action="store_true")
@@ -69,7 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run_consensus(namespace: argparse.Namespace) -> int:
     try:
-        adapter = _mock_adapter(namespace.adapter, agents=namespace.agents, rounds=namespace.rounds)
+        adapter = _resolve_adapter(namespace.adapter, agents=namespace.agents, rounds=namespace.rounds)
         engine = ConsensusEngine(adapter, agents_count=namespace.agents, max_rounds=namespace.rounds)
         result = engine.decide(namespace.question, context=namespace.context)
     except (ConsensusProtocolError, ValueError) as exc:
@@ -77,6 +80,14 @@ def _run_consensus(namespace: argparse.Namespace) -> int:
         return 1
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
     return 0
+
+
+def _resolve_adapter(name: str, *, agents: int, rounds: int) -> CallableLlmAdapter | _ScriptedConsensusLlm:
+    if name == "hermes":
+        from cluxion_effort_ultracode.plugin import _default_llm
+
+        return _default_llm()
+    return _mock_adapter(name, agents=agents, rounds=rounds)
 
 
 def _mock_adapter(name: str, *, agents: int, rounds: int) -> CallableLlmAdapter | _ScriptedConsensusLlm:
@@ -163,15 +174,15 @@ def _doctor(namespace):
         cwd=Path.cwd(),
         hermes_bin="hermes",
         catalog_path=catalog_path,
-        probes=__import__(
-            "cluxion_effort_ultracode.doctor.probes", fromlist=["PROBES"]
-        ).PROBES,
+        probes=__import__("cluxion_effort_ultracode.doctor.probes", fromlist=["PROBES"]).PROBES,
         plugin="effort-ultracode",
         version=__import__("cluxion_effort_ultracode").__version__,
     )
-    text = render_text(result, __import__(
-        "cluxion_effort_ultracode.doctor.framework", fromlist=["load_catalog"]
-    ).load_catalog(catalog_path), verbose=bool(getattr(namespace, "verbose", False)))
+    text = render_text(
+        result,
+        __import__("cluxion_effort_ultracode.doctor.framework", fromlist=["load_catalog"]).load_catalog(catalog_path),
+        verbose=bool(getattr(namespace, "verbose", False)),
+    )
     print(text, file=sys.stderr)
     if getattr(namespace, "json", False):
         print(render_json(result))

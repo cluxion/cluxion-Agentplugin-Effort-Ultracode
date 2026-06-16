@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from .framework import DoctorContext
 
@@ -22,6 +24,15 @@ def _register(name: str):
 @_register("hermes_on_path")
 def hermes_on_path(ctx: DoctorContext) -> tuple[str, str]:
     p = shutil.which(ctx.hermes_bin)
+    if p:
+        return "pass", str(p)
+    return "fail", "not found on PATH"
+
+
+@_register("hermes_binary_available")
+def hermes_binary_available(ctx: DoctorContext) -> tuple[str, str]:
+    binary = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_BINARY", ctx.hermes_bin)
+    p = shutil.which(binary)
     if p:
         return "pass", str(p)
     return "fail", "not found on PATH"
@@ -50,12 +61,26 @@ def hermes_oneshot_flag(ctx: DoctorContext) -> tuple[str, str]:
         return "fail", f"run error: {e}"
 
 
+@_register("hermes_z_flag_support")
+def hermes_z_flag_support(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        cp = ctx.run([ctx.hermes_bin, "--help"])
+        out = cp.stdout + cp.stderr
+        if "-z" in out and "--oneshot" in out:
+            return "pass", "present"
+        return "fail", "missing in --help"
+    except Exception as e:
+        return "fail", f"run error: {e}"
+
+
 @_register("entry_point_registered")
 def entry_point_registered(ctx: DoctorContext) -> tuple[str, str]:
     try:
         eps = importlib.metadata.entry_points(group="hermes_agent.plugins")
         for ep in eps:
-            if "cluxion-agentplugin-effort-ultracode" in (ep.name or "").lower() or "cluxion_effort_ultracode" in (ep.value or ""):
+            if "cluxion-agentplugin-effort-ultracode" in (ep.name or "").lower() or "cluxion_effort_ultracode" in (
+                ep.value or ""
+            ):
                 mod = ep.load()
                 if hasattr(mod, "register") and callable(mod.register):
                     return "pass", ep.value or str(ep)
@@ -88,110 +113,85 @@ def install_integrity(ctx: DoctorContext) -> tuple[str, str]:
         return "fail", f"version error: {e}"
 
 
-# note: no native_module_importable (NATIVE=none)
-# other checks in catalog will be reported as skip (no probe)
-
-import json
-import os
-import sqlite3
-import sys
-import tempfile
-from pathlib import Path
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
-
-
-@_register("import_availability")
-def import_availability(ctx: DoctorContext) -> tuple[str, str]:
-    try:
-        import importlib
-
-        importlib.import_module("json")
-        return "pass", "json importable"
-    except Exception as e:
-        return "skip", f"import error: {e}"
-
-
-@_register("abi3_wheel_compatible")
-def abi3_wheel_compatible(ctx: DoctorContext) -> tuple[str, str]:
-    return "pass", f"python {sys.version_info.major}.{sys.version_info.minor} (abi3 floor 3.11)"
-
-
-@_register("sqlite_wal_mode_compatible")
-def sqlite_wal_mode_compatible(ctx: DoctorContext) -> tuple[str, str]:
-    try:
-        with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / "test.db"
-            conn = sqlite3.connect(str(db))
-            try:
-                mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
-                if str(mode).lower() == "wal":
-                    return "pass", f"sqlite {sqlite3.sqlite_version} supports WAL"
-                return "warn", f"returned {mode}"
-            finally:
-                conn.close()
-    except Exception as e:
-        return "skip", f"sqlite error: {e}"
-
-
-@_register("json_serialization_deterministic")
-def json_serialization_deterministic(ctx: DoctorContext) -> tuple[str, str]:
-    try:
-        data = {"a": 1, "b": [2, 3], "c": {"d": "e"}}
-        s1 = json.dumps(data, sort_keys=True, separators=(",", ":"))
-        s2 = json.dumps(data, sort_keys=True, separators=(",", ":"))
-        if s1 == s2:
-            return "pass", "roundtrip byte equal"
-        return "fail", "not deterministic"
-    except Exception as e:
-        return "skip", f"json error: {e}"
-
-
-@_register("hermes_plugin_enabled")
-def hermes_plugin_enabled(ctx: DoctorContext) -> tuple[str, str]:
-    try:
-        cfg = Path.home() / ".hermes" / "config.yaml"
-        if not cfg.exists():
-            return "skip", "config not present"
-        if yaml is None:
-            return "skip", "pyyaml not importable"
-        try:
-            content = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
-            plugins = content.get("plugins", {}) if isinstance(content, dict) else {}
-            enabled = plugins.get("enabled", []) if isinstance(plugins, dict) else []
-            plugin_names = [str(x).lower() for x in (enabled if isinstance(enabled, (list, tuple)) else [])]
-            if any("effort-ultracode" in n or "cluxion-agentplugin-effort-ultracode" in n for n in plugin_names):
-                return "pass", "plugin enabled in config"
-            return "warn", "not in plugins.enabled"
-        except Exception as e:
-            return "skip", f"yaml parse error: {e}"
-    except Exception as e:
-        return "skip", f"config read error: {e}"
-
-
-@_register("env_var_consistency")
-def env_var_consistency(ctx: DoctorContext) -> tuple[str, str]:
+@_register("hermes_timeout_configured")
+def hermes_timeout_configured(ctx: DoctorContext) -> tuple[str, str]:
     try:
         val = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT", "").strip()
         if not val:
             return "pass", "defaults (unset)"
         try:
-            t = float(val)
-            if t > 0:
-                return "pass", f"valid {t}"
-            return "warn", "non-positive"
+            timeout = float(val)
         except ValueError:
-            return "warn", "non-numeric"
+            return "fail", "non-numeric"
+        if timeout > 0:
+            return "pass", f"valid {timeout}"
+        return "fail", "non-positive"
     except Exception as e:
-        return "skip", f"env error: {e}"
+        return "fail", f"env error: {e}"
 
 
-@_register("hermes_timeout_configured")
-def hermes_timeout_configured(ctx: DoctorContext) -> tuple[str, str]:
-    return env_var_consistency(ctx)
+@_register("consensus_schema_contract")
+def consensus_schema_contract(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.plugin import CONSENSUS_SCHEMA, register
+
+        class _RecordingCtx:
+            def __init__(self) -> None:
+                self.tools: list[dict[str, Any]] = []
+
+            def register_tool(
+                self,
+                *,
+                name: str,
+                toolset: str,
+                schema: Mapping[str, Any],
+                handler: object,
+                **_: object,
+            ) -> None:
+                self.tools.append({"name": name, "toolset": toolset, "schema": dict(schema)})
+
+        rec = _RecordingCtx()
+        register(rec)
+        tool = next((t for t in rec.tools if t["name"] == "cluxion_consensus"), None)
+        schema = tool["schema"] if tool is not None else CONSENSUS_SCHEMA
+
+        if schema.get("name") != "cluxion_consensus":
+            return "fail", f"name={schema.get('name')!r}"
+        description = schema.get("description", "")
+        if not isinstance(description, str) or not description.strip():
+            return "fail", "empty description"
+        parameters = schema.get("parameters")
+        if not isinstance(parameters, dict):
+            return "fail", "parameters not a dict"
+        required = parameters.get("required")
+        properties = parameters.get("properties")
+        if not isinstance(required, list) or "question" not in required:
+            return "fail", f"required={required!r}"
+        if not isinstance(properties, dict) or "question" not in properties:
+            return "fail", "question missing from properties"
+        return "pass", "schema contract ok"
+    except Exception as e:
+        return "fail", f"schema error: {e}"
+
+
+@_register("llm_factory_callable")
+def llm_factory_callable(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.plugin import _call_llm_factory, _default_llm
+
+        class _StubLlm:
+            def complete(self, prompt: str, *, schema: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+                return {"stance": "Yes", "rationale": "stub", "evidence": ["e"], "confidence": 0.9}
+
+        _call_llm_factory(lambda: _StubLlm())
+        if not callable(_default_llm):
+            return "fail", "_default_llm is not callable"
+        default_llm = _default_llm()
+        if not callable(getattr(default_llm, "complete", None)):
+            return "fail", "_default_llm() missing complete()"
+        return "pass", "factory contract ok"
+    except Exception as e:
+        return "fail", f"factory error: {e}"
 
 
 @_register("plugin_registration_host_compat")
@@ -199,10 +199,10 @@ def plugin_registration_host_compat(ctx: DoctorContext) -> tuple[str, str]:
     try:
         from cluxion_effort_ultracode.plugin import register
 
-        class DummyCtx:
+        class _DummyCtx:
             pass
 
-        register(DummyCtx())
+        register(_DummyCtx())
         return "pass", "no raise on minimal ctx"
     except Exception as e:
         return "warn", f"raised: {type(e).__name__}"
