@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -79,6 +80,19 @@ class DoctorContext:
         self.cwd = cwd
         self.hermes_bin = hermes_bin
         self.run = run
+        self._run_cache: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {}
+        self._which_cache: dict[str, str | None] = {}
+
+    def run_cached(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        key = tuple(cmd)
+        if key not in self._run_cache:
+            self._run_cache[key] = self.run(cmd)
+        return self._run_cache[key]
+
+    def which(self, binary: str) -> str | None:
+        if binary not in self._which_cache:
+            self._which_cache[binary] = shutil.which(binary)
+        return self._which_cache[binary]
 
 
 def load_catalog(catalog_path: Path) -> tuple[CatalogEntry, ...]:

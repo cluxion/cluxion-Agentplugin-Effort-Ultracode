@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
-import shutil
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -23,7 +22,7 @@ def _register(name: str):
 
 @_register("hermes_on_path")
 def hermes_on_path(ctx: DoctorContext) -> tuple[str, str]:
-    p = shutil.which(ctx.hermes_bin)
+    p = ctx.which(ctx.hermes_bin)
     if p:
         return "pass", str(p)
     return "fail", "not found on PATH"
@@ -32,7 +31,7 @@ def hermes_on_path(ctx: DoctorContext) -> tuple[str, str]:
 @_register("hermes_binary_available")
 def hermes_binary_available(ctx: DoctorContext) -> tuple[str, str]:
     binary = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_BINARY", ctx.hermes_bin)
-    p = shutil.which(binary)
+    p = ctx.which(binary)
     if p:
         return "pass", str(p)
     return "skip", "hermes binary not on PATH — cannot verify"
@@ -41,7 +40,7 @@ def hermes_binary_available(ctx: DoctorContext) -> tuple[str, str]:
 @_register("hermes_version")
 def hermes_version(ctx: DoctorContext) -> tuple[str, str]:
     try:
-        cp = ctx.run([ctx.hermes_bin, "--version"])
+        cp = ctx.run_cached([ctx.hermes_bin, "--version"])
         if cp.returncode == 0 and "Hermes Agent v" in cp.stdout:
             return "pass", cp.stdout.strip()
         return "fail", cp.stdout.strip() or cp.stderr.strip()
@@ -52,7 +51,7 @@ def hermes_version(ctx: DoctorContext) -> tuple[str, str]:
 @_register("hermes_oneshot_flag")
 def hermes_oneshot_flag(ctx: DoctorContext) -> tuple[str, str]:
     try:
-        cp = ctx.run([ctx.hermes_bin, "--help"])
+        cp = ctx.run_cached([ctx.hermes_bin, "--help"])
         out = cp.stdout + cp.stderr
         if "-z" in out and "--oneshot" in out:
             return "pass", "present"
@@ -64,10 +63,10 @@ def hermes_oneshot_flag(ctx: DoctorContext) -> tuple[str, str]:
 @_register("hermes_subprocess_launchable")
 def hermes_subprocess_launchable(ctx: DoctorContext) -> tuple[str, str]:
     binary = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_BINARY", ctx.hermes_bin)
-    if shutil.which(binary) is None:
+    if ctx.which(binary) is None:
         return "skip", "hermes binary not on PATH — cannot verify"
     try:
-        cp = ctx.run([ctx.hermes_bin, "--version"])
+        cp = ctx.run_cached([ctx.hermes_bin, "--version"])
         if cp.returncode == 0:
             return "pass", cp.stdout.strip() or "launched"
         detail = cp.stdout.strip() or cp.stderr.strip() or f"exit {cp.returncode}"
@@ -79,10 +78,10 @@ def hermes_subprocess_launchable(ctx: DoctorContext) -> tuple[str, str]:
 @_register("hermes_z_flag_support")
 def hermes_z_flag_support(ctx: DoctorContext) -> tuple[str, str]:
     binary = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_BINARY", ctx.hermes_bin)
-    if shutil.which(binary) is None:
+    if ctx.which(binary) is None:
         return "skip", "hermes binary not on PATH — cannot verify"
     try:
-        cp = ctx.run([ctx.hermes_bin, "--help"])
+        cp = ctx.run_cached([ctx.hermes_bin, "--help"])
         out = cp.stdout + cp.stderr
         if "-z" in out and "--oneshot" in out:
             return "pass", "present"
@@ -110,7 +109,7 @@ def entry_point_registered(ctx: DoctorContext) -> tuple[str, str]:
 @_register("toolset_valid")
 def toolset_valid(ctx: DoctorContext) -> tuple[str, str]:
     try:
-        cp = ctx.run([ctx.hermes_bin, "tools", "list"])
+        cp = ctx.run_cached([ctx.hermes_bin, "tools", "list"])
         if cp.returncode == 0 and "ultracode" in cp.stdout:
             return "pass", "ultracode present"
         return "fail", "ultracode not in tools list"

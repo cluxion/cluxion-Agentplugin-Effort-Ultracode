@@ -7,6 +7,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from cluxion_effort_ultracode.core.ports import LlmPort
@@ -102,13 +103,15 @@ class ConsensusEngine:
         return self._no_consensus_result(current, transcript, rounds=self.max_rounds)
 
     def _initial_positions(self, question: str, context: str) -> list[AgentPosition]:
-        positions: list[AgentPosition] = []
-        for index in range(self.agents_count):
+        def _run_agent(index: int) -> AgentPosition:
             agent_id = self._agent_id(index)
             prompt = self._build_initial_prompt(question, context, agent_id)
             raw = self.llm.complete(prompt, schema=POSITION_SCHEMA)
-            positions.append(_parse_position(raw, agent_id=agent_id, debate=False))
-        return positions
+            return _parse_position(raw, agent_id=agent_id, debate=False)
+
+        with ThreadPoolExecutor(max_workers=self.agents_count) as executor:
+            futures = [executor.submit(_run_agent, index) for index in range(self.agents_count)]
+            return [future.result() for future in futures]
 
     def _debate_round(
         self,
@@ -117,8 +120,7 @@ class ConsensusEngine:
         round_index: int,
         previous: Sequence[AgentPosition],
     ) -> list[AgentPosition]:
-        updated: list[AgentPosition] = []
-        for index, prior in enumerate(previous):
+        def _run_agent(index: int, prior: AgentPosition) -> AgentPosition:
             prompt = self._build_debate_prompt(
                 question=question,
                 context=context,
@@ -132,8 +134,13 @@ class ConsensusEngine:
             raw = self.llm.complete(prompt, schema=DEBATE_SCHEMA)
             position = _parse_position(raw, agent_id=prior.agent_id, debate=True)
             self._validate_debate_update(prior, position)
-            updated.append(position)
-        return updated
+            return position
+
+        with ThreadPoolExecutor(max_workers=self.agents_count) as executor:
+            futures = [
+                executor.submit(_run_agent, index, prior) for index, prior in enumerate(previous)
+            ]
+            return [future.result() for future in futures]
 
     def _validate_debate_update(self, prior: AgentPosition, position: AgentPosition) -> None:
         if not position.conceded and not position.maintained:

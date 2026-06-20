@@ -92,7 +92,7 @@ def test_warn_only_is_ok():
 
 def test_critical_skip_does_not_degrade_summary(monkeypatch):
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: None,
     )
     # Exclude probes that FAIL (not skip) when hermes is absent; we test probe-level SKIP here.
@@ -123,7 +123,7 @@ def test_critical_skip_does_not_degrade_summary(monkeypatch):
 
 def test_hermes_binary_available_passes_when_present(monkeypatch):
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: "/usr/local/bin/hermes",
     )
     status, detail = PROBES["hermes_binary_available"](_doctor_ctx())
@@ -138,7 +138,7 @@ def test_hermes_static_critical_probes_registered():
 
 def test_hermes_z_flag_support_parses_help(monkeypatch):
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: "/usr/local/bin/hermes",
     )
 
@@ -158,7 +158,7 @@ def test_hermes_z_flag_support_parses_help(monkeypatch):
 
 def test_hermes_z_flag_support_skips_when_absent(monkeypatch):
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: None,
     )
     status, detail = PROBES["hermes_z_flag_support"](_doctor_ctx())
@@ -168,7 +168,7 @@ def test_hermes_z_flag_support_skips_when_absent(monkeypatch):
 
 def test_static_probes_do_not_skip(monkeypatch):
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: "/usr/local/bin/hermes",
     )
     ctx = _doctor_ctx()
@@ -231,6 +231,40 @@ def _mock_healthy_hermes_run(cmd):
     return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
 
+def test_doctor_run_memoizes_duplicate_commands(monkeypatch):
+    monkeypatch.setattr(
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
+        lambda _: "/usr/local/bin/hermes",
+    )
+    invocations: list[list[str]] = []
+
+    def _counting_run(cmd):
+        invocations.append(list(cmd))
+        return _mock_healthy_hermes_run(cmd)
+
+    monkeypatch.setattr(
+        "cluxion_effort_ultracode.doctor.framework._make_runner",
+        lambda timeout=8.0: _counting_run,
+    )
+    result = run_doctor(
+        cwd=Path.cwd(),
+        catalog_path=_catalog_path(),
+        probes=PROBES,
+        plugin="effort-ultracode",
+        version="0.1.4",
+    )
+    statuses = {c.check_id: c.status for c in result.checks}
+    assert statuses["hermes_version"] == "pass"
+    assert statuses["hermes_subprocess_launchable"] == "pass"
+    assert statuses["hermes_oneshot_flag"] == "pass"
+    assert statuses["hermes_z_flag_support"] == "pass"
+
+    version_calls = [cmd for cmd in invocations if cmd[-1] == "--version"]
+    help_calls = [cmd for cmd in invocations if cmd[-1] == "--help"]
+    assert len(version_calls) == 1
+    assert len(help_calls) == 1
+
+
 def test_hermes_subprocess_launchable_doctor_invariants(monkeypatch):
     cat = _catalog_path()
     doctor_kwargs = {
@@ -242,7 +276,7 @@ def test_hermes_subprocess_launchable_doctor_invariants(monkeypatch):
     }
 
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: "/usr/local/bin/hermes",
     )
     monkeypatch.setattr(
@@ -256,7 +290,7 @@ def test_hermes_subprocess_launchable_doctor_invariants(monkeypatch):
     assert json.loads(render_json(healthy))["ok"] is True
 
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: None,
     )
     hermes_absent_fail_probes = {
@@ -272,7 +306,7 @@ def test_hermes_subprocess_launchable_doctor_invariants(monkeypatch):
     assert absent.ok is True
 
     monkeypatch.setattr(
-        "cluxion_effort_ultracode.doctor.probes.shutil.which",
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
         lambda _: "/usr/local/bin/hermes",
     )
 
