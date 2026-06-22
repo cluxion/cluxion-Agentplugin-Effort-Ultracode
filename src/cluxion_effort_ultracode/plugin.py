@@ -84,6 +84,32 @@ def register(ctx: object) -> None:
         emoji="🩺",
     )
 
+    register_command = getattr(ctx, "register_command", None)
+    if callable(register_command):
+
+        def _slash_cluxion_consensus(raw_args: str) -> str:
+            question = raw_args.strip()
+            if not question:
+                return "Usage: /cluxion-consensus <question>"
+            payload = _handle_consensus({"question": question}, llm_factory=_default_llm)
+            return json.dumps(payload, ensure_ascii=False, indent=2)
+
+        def _slash_ultracode_doctor(raw_args: str) -> str:
+            del raw_args
+            return _handle_doctor({})
+
+        register_command(
+            "cluxion-consensus",
+            _slash_cluxion_consensus,
+            description="Run 3-agent adversarial consensus debate (ultracode)",
+            args_hint="<question>",
+        )
+        register_command(
+            "ultracode-doctor",
+            _slash_ultracode_doctor,
+            description="Run ultracode plugin doctor checks",
+        )
+
 
 def build_consensus_handler(llm_factory: object | None = None):
     """Build the Hermes registry handler for cluxion_consensus."""
