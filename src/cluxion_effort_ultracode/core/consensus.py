@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
 
 from cluxion_effort_ultracode.core.ports import LlmPort
@@ -21,6 +23,9 @@ from cluxion_effort_ultracode.core.types import (
 
 MAX_AGENTS = 8
 MAX_ROUNDS = 8
+DEFAULT_AGENT_TIMEOUT_S = 180.0
+DEFAULT_DEBATE_BUDGET_S = 600.0
+MIN_QUORUM = 2
 
 POSITION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -78,6 +83,8 @@ class ConsensusEngine:
         agents_count: int = 3,
         max_rounds: int = 3,
         rotate_devils_advocate: bool = True,
+        agent_timeout_s: float = DEFAULT_AGENT_TIMEOUT_S,
+        debate_budget_s: float = DEFAULT_DEBATE_BUDGET_S,
     ) -> None:
         if agents_count < 2:
             raise ValueError("agents_count must be at least 2")
@@ -91,34 +98,48 @@ class ConsensusEngine:
         self.agents_count = agents_count
         self.max_rounds = max_rounds
         self.rotate_devils_advocate = rotate_devils_advocate
+        if agent_timeout_s <= 0:
+            raise ValueError("agent_timeout_s must be positive")
+        if debate_budget_s <= 0:
+            raise ValueError("debate_budget_s must be positive")
+        self.agent_timeout_s = agent_timeout_s
+        self.debate_budget_s = debate_budget_s
 
     def decide(self, question: str, *, context: str = "") -> ConsensusResult:
         """Run independent positions, debate revisions, and deterministic convergence checks."""
 
         transcript: list[ConsensusRound] = []
-        current = self._initial_positions(question, context)
+        deadline = time.monotonic() + self.debate_budget_s
+        current = self._initial_positions(question, context, deadline=deadline)
         transcript.append(ConsensusRound(round_index=0, phase="independent", positions=current))
         if self._is_unanimous(current):
             return self._unanimous_result(current, transcript, rounds=0)
 
         for round_index in range(1, self.max_rounds + 1):
-            current = self._debate_round(question, context, round_index, current)
+            if time.monotonic() >= deadline:
+                raise ConsensusProtocolError(
+                    f"debate exceeded debate_budget_s={self.debate_budget_s:.0f}s after round {round_index - 1}"
+                )
+            current = self._debate_round(question, context, round_index, current, deadline=deadline)
             transcript.append(ConsensusRound(round_index=round_index, phase="debate", positions=current))
             if self._is_unanimous(current):
                 return self._unanimous_result(current, transcript, rounds=round_index)
 
         return self._no_consensus_result(current, transcript, rounds=self.max_rounds)
 
-    def _initial_positions(self, question: str, context: str) -> list[AgentPosition]:
+    def _initial_positions(self, question: str, context: str, *, deadline: float) -> list[AgentPosition]:
         def _run_agent(index: int) -> AgentPosition:
             agent_id = self._agent_id(index)
             prompt = self._build_initial_prompt(question, context, agent_id)
             raw = self.llm.complete(prompt, schema=POSITION_SCHEMA)
             return _parse_position(raw, agent_id=agent_id, debate=False)
 
-        with ThreadPoolExecutor(max_workers=self.agents_count) as executor:
-            futures = [executor.submit(_run_agent, index) for index in range(self.agents_count)]
-            return [future.result() for future in futures]
+        return self._gather_positions(
+            [(index, None) for index in range(self.agents_count)],
+            lambda index, _prior: _run_agent(index),
+            deadline=deadline,
+            phase="independent",
+        )
 
     def _debate_round(
         self,
@@ -126,6 +147,8 @@ class ConsensusEngine:
         context: str,
         round_index: int,
         previous: Sequence[AgentPosition],
+        *,
+        deadline: float,
     ) -> list[AgentPosition]:
         def _run_agent(index: int, prior: AgentPosition) -> AgentPosition:
             prompt = self._build_debate_prompt(
@@ -143,11 +166,40 @@ class ConsensusEngine:
             self._validate_debate_update(prior, position)
             return position
 
-        with ThreadPoolExecutor(max_workers=self.agents_count) as executor:
-            futures = [
-                executor.submit(_run_agent, index, prior) for index, prior in enumerate(previous)
-            ]
-            return [future.result() for future in futures]
+        return self._gather_positions(
+            list(enumerate(previous)),
+            _run_agent,
+            deadline=deadline,
+            phase=f"debate round {round_index}",
+        )
+
+    def _gather_positions(self, tasks, run_agent, *, deadline: float, phase: str) -> list[AgentPosition]:
+        """Collect agent positions with per-agent and total deadlines.
+
+        A hung or failed agent is dropped instead of blocking siblings; the
+        debate continues while at least MIN_QUORUM positions survive.
+        """
+        results: dict[int, AgentPosition] = {}
+        failures: list[str] = []
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            futures = {
+                executor.submit(run_agent, index, prior): index for index, prior in tasks
+            }
+            for future, index in futures.items():
+                remaining = deadline - time.monotonic()
+                per_agent = min(self.agent_timeout_s, max(0.1, remaining))
+                try:
+                    results[index] = future.result(timeout=per_agent)
+                except FutureTimeoutError:
+                    # Hangs are isolated: one stuck agent must not block siblings.
+                    # Protocol violations and backend errors still propagate -
+                    # hiding them would fake a healthier debate than happened.
+                    future.cancel()
+                    failures.append(f"agent {index}: timed out after {per_agent:.0f}s in {phase}")
+        if len(results) < MIN_QUORUM:
+            detail = "; ".join(failures) or "no agent completed"
+            raise ConsensusProtocolError(f"quorum lost in {phase} ({len(results)}/{len(tasks)} survived): {detail}")
+        return [results[index] for index in sorted(results)]
 
     def _validate_debate_update(self, prior: AgentPosition, position: AgentPosition) -> None:
         if not position.conceded and not position.maintained:
