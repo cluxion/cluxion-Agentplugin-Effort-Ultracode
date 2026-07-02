@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 
 import pytest
-from tests.test_consensus import ScriptedLlm, position
+from tests.test_consensus import ScriptedLlm, _agent_id_from_prompt, position
 
-from cluxion_effort_ultracode.core.consensus import ConsensusEngine, ConsensusProtocolError
+from cluxion_effort_ultracode.core.consensus import ConsensusEngine
 
 
 class SlowThenFineLlm:
@@ -39,8 +39,60 @@ class SlowScriptedLlm(ScriptedLlm):
 def test_total_debate_budget_is_enforced() -> None:
     llm = SlowScriptedLlm([position("Adopt"), position("Delay"), position("Reject")] * 10)
     engine = ConsensusEngine(llm, agents_count=3, max_rounds=8, debate_budget_s=0.005)
-    with pytest.raises(ConsensusProtocolError, match="debate_budget_s"):
-        engine.decide("Q?")
+    result = engine.decide("Q?")
+    assert result.status == "aborted"
+    assert result.abort_reason is not None
+    assert "debate_budget_s" in result.abort_reason
+    assert result.rounds_completed == 0
+    assert len(result.transcript) == 1
+
+
+def test_quorum_abort_returns_partial_transcript() -> None:
+    class SlowAfterInitialLlm:
+        def complete(self, prompt: str, *, schema: object = None) -> dict[str, object]:
+            if "Round: 0" in prompt:
+                return position("Adopt" if "agent-1" in prompt else "Delay")
+            time.sleep(1.0)
+            return {
+                **position("Adopt"),
+                "conceded": [{"point": "Delay", "reason": "Adopt has stronger evidence"}],
+                "maintained": [],
+            }
+
+    engine = ConsensusEngine(SlowAfterInitialLlm(), agents_count=3, max_rounds=1, agent_timeout_s=0.05)
+    result = engine.decide("Q?")
+    assert result.status == "aborted"
+    assert result.rounds_completed == 0
+    assert len(result.transcript) == 1
+    assert "quorum lost" in (result.abort_reason or "")
+
+
+def test_devils_advocate_rotates_over_surviving_agents_after_drop() -> None:
+    class DropThenRecordLlm:
+        def __init__(self) -> None:
+            self.debate_prompts: list[str] = []
+
+        def complete(self, prompt: str, *, schema: object = None) -> dict[str, object]:
+            agent_id = _agent_id_from_prompt(prompt)
+            if "Round: 0" in prompt:
+                if agent_id == "agent-1":
+                    time.sleep(0.2)
+                return position("Adopt" if agent_id == "agent-2" else "Delay")
+            self.debate_prompts.append(prompt)
+            return {
+                **position("Adopt" if agent_id == "agent-2" else "Delay"),
+                "maintained": [{"point": "current stance", "reason": "Evidence remains stronger"}],
+                "conceded": [],
+            }
+
+    llm = DropThenRecordLlm()
+    engine = ConsensusEngine(llm, agents_count=3, max_rounds=2, agent_timeout_s=0.05)
+    result = engine.decide("Q?")
+
+    assert result.status == "no_consensus"
+    round_2 = [p for p in llm.debate_prompts if "Round: 2 " in p]
+    assert len(round_2) == 2
+    assert sum("Temporary role: devil's advocate" in p for p in round_2) == 1
 
 
 def test_invalid_timeouts_rejected() -> None:

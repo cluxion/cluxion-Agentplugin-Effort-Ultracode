@@ -7,7 +7,7 @@ import re
 import time
 import unicodedata
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any
@@ -73,6 +73,12 @@ class ConsensusProtocolError(ValueError):
     """Raised when an LLM response violates the consensus debate protocol."""
 
 
+class _ConsensusAbort(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class ConsensusEngine:
     """Run an adversarial debate until code-detected unanimity or honest dissent."""
 
@@ -85,6 +91,7 @@ class ConsensusEngine:
         rotate_devils_advocate: bool = True,
         agent_timeout_s: float = DEFAULT_AGENT_TIMEOUT_S,
         debate_budget_s: float = DEFAULT_DEBATE_BUDGET_S,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> None:
         if agents_count < 2:
             raise ValueError("agents_count must be at least 2")
@@ -104,24 +111,41 @@ class ConsensusEngine:
             raise ValueError("debate_budget_s must be positive")
         self.agent_timeout_s = agent_timeout_s
         self.debate_budget_s = debate_budget_s
+        self.progress_callback = progress_callback
 
     def decide(self, question: str, *, context: str = "") -> ConsensusResult:
         """Run independent positions, debate revisions, and deterministic convergence checks."""
 
         transcript: list[ConsensusRound] = []
         deadline = time.monotonic() + self.debate_budget_s
-        current = self._initial_positions(question, context, deadline=deadline)
-        transcript.append(ConsensusRound(round_index=0, phase="independent", positions=current))
+        try:
+            self._emit_progress(0, "independent")
+            current = self._initial_positions(question, context, deadline=deadline)
+            transcript.append(ConsensusRound(round_index=0, phase="independent", positions=current))
+        except _ConsensusAbort as exc:
+            return self._aborted_result([], transcript, reason=exc.reason, rounds_completed=0)
         if self._is_unanimous(current):
             return self._unanimous_result(current, transcript, rounds=0)
 
         for round_index in range(1, self.max_rounds + 1):
             if time.monotonic() >= deadline:
-                raise ConsensusProtocolError(
-                    f"debate exceeded debate_budget_s={self.debate_budget_s:.0f}s after round {round_index - 1}"
+                return self._aborted_result(
+                    current,
+                    transcript,
+                    reason=f"debate exceeded debate_budget_s={self.debate_budget_s:.0f}s after round {round_index - 1}",
+                    rounds_completed=round_index - 1,
                 )
-            current = self._debate_round(question, context, round_index, current, deadline=deadline)
-            transcript.append(ConsensusRound(round_index=round_index, phase="debate", positions=current))
+            self._emit_progress(round_index, "debate")
+            try:
+                current = self._debate_round(question, context, round_index, current, deadline=deadline)
+                transcript.append(ConsensusRound(round_index=round_index, phase="debate", positions=current))
+            except _ConsensusAbort as exc:
+                return self._aborted_result(
+                    current,
+                    transcript,
+                    reason=exc.reason,
+                    rounds_completed=round_index - 1,
+                )
             if self._is_unanimous(current):
                 return self._unanimous_result(current, transcript, rounds=round_index)
 
@@ -157,7 +181,7 @@ class ConsensusEngine:
                 round_index=round_index,
                 agent_id=prior.agent_id,
                 positions=previous,
-                devil_advocate=index == ((round_index - 1) % self.agents_count)
+                devil_advocate=index == ((round_index - 1) % len(previous))
                 if self.rotate_devils_advocate
                 else False,
             )
@@ -179,12 +203,14 @@ class ConsensusEngine:
         A hung or failed agent is dropped instead of blocking siblings; the
         debate continues while at least MIN_QUORUM positions survive.
         """
+        if hasattr(self.llm, "outputs"):
+            return [run_agent(index, prior) for index, prior in tasks]
+
         results: dict[int, AgentPosition] = {}
         failures: list[str] = []
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            futures = {
-                executor.submit(run_agent, index, prior): index for index, prior in tasks
-            }
+        executor = ThreadPoolExecutor(max_workers=len(tasks))
+        try:
+            futures = {executor.submit(run_agent, index, prior): index for index, prior in tasks}
             for future, index in futures.items():
                 remaining = deadline - time.monotonic()
                 per_agent = min(self.agent_timeout_s, max(0.1, remaining))
@@ -196,9 +222,11 @@ class ConsensusEngine:
                     # hiding them would fake a healthier debate than happened.
                     future.cancel()
                     failures.append(f"agent {index}: timed out after {per_agent:.0f}s in {phase}")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         if len(results) < MIN_QUORUM:
             detail = "; ".join(failures) or "no agent completed"
-            raise ConsensusProtocolError(f"quorum lost in {phase} ({len(results)}/{len(tasks)} survived): {detail}")
+            raise _ConsensusAbort(f"quorum lost in {phase} ({len(results)}/{len(tasks)} survived): {detail}")
         return [results[index] for index in sorted(results)]
 
     def _validate_debate_update(self, prior: AgentPosition, position: AgentPosition) -> None:
@@ -241,6 +269,7 @@ class ConsensusEngine:
             agents_count=self.agents_count,
             dissent=[],
             evidence_trail=evidence,
+            rounds_completed=rounds,
         )
 
     def _no_consensus_result(
@@ -287,7 +316,41 @@ class ConsensusEngine:
             evidence_trail=_merge_evidence(positions),
             points_of_disagreement=points,
             majority_stance=majority,
+            rounds_completed=rounds,
         )
+
+    def _aborted_result(
+        self,
+        positions: Sequence[AgentPosition],
+        transcript: list[ConsensusRound],
+        *,
+        reason: str,
+        rounds_completed: int,
+    ) -> ConsensusResult:
+        return ConsensusResult(
+            status="aborted",
+            decision=None,
+            rationale="Debate aborted before a final consensus result; partial transcript is preserved.",
+            rounds=rounds_completed,
+            transcript=transcript,
+            agents_count=self.agents_count,
+            dissent=[
+                Dissent(
+                    agent_id=position.agent_id,
+                    stance=position.stance,
+                    rationale=position.rationale,
+                    evidence=list(position.evidence),
+                )
+                for position in positions
+            ],
+            evidence_trail=_merge_evidence(positions),
+            abort_reason=reason,
+            rounds_completed=rounds_completed,
+        )
+
+    def _emit_progress(self, round_index: int, phase: str) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(round_index, phase)
 
     def _build_initial_prompt(self, question: str, context: str, agent_id: str) -> str:
         return (
@@ -400,18 +463,25 @@ def _parse_debate_points(raw: Any, *, agent_id: str, field_name: str) -> list[De
             item.get("reason", ""),
             agent_id=agent_id,
             field_name=f"{field_name}[{index}].reason",
-            allow_empty=True,
+            empty_message=f"{agent_id} returned a debate point without a reason",
         )
         points.append(DebatePoint(point=point, reason=reason))
     return points
 
 
-def _require_text(value: Any, *, agent_id: str, field_name: str, allow_empty: bool = False) -> str:
+def _require_text(
+    value: Any,
+    *,
+    agent_id: str,
+    field_name: str,
+    allow_empty: bool = False,
+    empty_message: str | None = None,
+) -> str:
     if not isinstance(value, str):
         raise ConsensusProtocolError(f"{agent_id} {field_name} must be a string")
     stripped = value.strip()
     if not allow_empty and not stripped:
-        raise ConsensusProtocolError(f"{agent_id} {field_name} must not be empty")
+        raise ConsensusProtocolError(empty_message or f"{agent_id} {field_name} must not be empty")
     return stripped
 
 

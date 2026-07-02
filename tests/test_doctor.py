@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from cluxion_effort_ultracode.doctor import (
@@ -49,6 +50,11 @@ def test_run_doctor_returns_result_and_deterministic():
     assert j1 == j2  # byte identical
     ids = [c.check_id for c in r1.checks]
     assert len(ids) > 0
+
+
+def test_every_catalog_check_has_registered_probe():
+    catalog_ids = {entry["check_id"] for entry in json.loads(_catalog_path().read_text())}
+    assert catalog_ids <= set(PROBES)
 
 
 def test_cross_cutting_checks_present():
@@ -263,6 +269,28 @@ def test_doctor_run_memoizes_duplicate_commands(monkeypatch):
     help_calls = [cmd for cmd in invocations if cmd[-1] == "--help"]
     assert len(version_calls) == 1
     assert len(help_calls) == 1
+
+
+def test_doctor_warm_run_under_400ms(monkeypatch):
+    monkeypatch.setattr(
+        "cluxion_effort_ultracode.doctor.framework.shutil.which",
+        lambda _: "/usr/local/bin/hermes",
+    )
+    monkeypatch.setattr(
+        "cluxion_effort_ultracode.doctor.framework._make_runner",
+        lambda timeout=8.0: _mock_healthy_hermes_run,
+    )
+    kwargs = {
+        "cwd": Path.cwd(),
+        "catalog_path": _catalog_path(),
+        "probes": PROBES,
+        "plugin": "effort-ultracode",
+        "version": "0.1.4",
+    }
+    run_doctor(**kwargs)
+    start = time.perf_counter()
+    run_doctor(**kwargs)
+    assert time.perf_counter() - start < 0.4
 
 
 def test_hermes_subprocess_launchable_doctor_invariants(monkeypatch):

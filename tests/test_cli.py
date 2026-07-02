@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import patch
 
 import pytest
 
+from cluxion_effort_ultracode.adapters.hermes_llm import HermesExecutableNotFoundError
 from cluxion_effort_ultracode.cli import main
 
 
@@ -57,7 +59,7 @@ def test_consensus_hermes_adapter_uses_default_llm_factory():
             self.index += 1
             return output
 
-    with patch("cluxion_effort_ultracode.plugin._default_llm", return_value=_StubLlm()):
+    with patch("cluxion_effort_ultracode.llm_factory.default_llm", return_value=_StubLlm()):
         exit_code = main(
             [
                 "consensus",
@@ -72,6 +74,60 @@ def test_consensus_hermes_adapter_uses_default_llm_factory():
             ]
         )
     assert exit_code == 0
+
+
+def test_consensus_cli_hermes_missing_returns_json_error(capsys):
+    with patch(
+        "cluxion_effort_ultracode.llm_factory.default_llm",
+        side_effect=HermesExecutableNotFoundError("Hermes executable not found: 'missing-hermes'"),
+    ):
+        exit_code = main(["consensus", "--question", "Adopt?", "--adapter", "hermes"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["error"] == "hermes_not_found"
+    assert "PATH" in payload["hint"]
+
+
+def test_consensus_cli_exposes_timeout_and_budget_flags(capsys):
+    exit_code = main(
+        [
+            "consensus",
+            "--question",
+            "Adopt?",
+            "--adapter",
+            "mock-unanimous",
+            "--agents",
+            "2",
+            "--rounds",
+            "1",
+            "--agent-timeout",
+            "3",
+            "--debate-budget",
+            "20",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert exit_code == 0
+    assert "round 0 independent start" in err
+    assert "round 1 debate start" not in err
+
+
+def test_doctor_json_output_is_stdout_pure(capsys):
+    main(["doctor", "--json"])
+    captured = capsys.readouterr()
+    json.loads(captured.out)
+    assert captured.err == ""
+
+
+def test_consensus_help_documents_cost_formula(capsys):
+    with pytest.raises(SystemExit):
+        main(["consensus", "--help"])
+    out = capsys.readouterr().out
+    assert "agents * (rounds + 1)" in out
+    assert "--agent-timeout" in out
+    assert "--debate-budget" in out
 
 
 @pytest.mark.skipif(

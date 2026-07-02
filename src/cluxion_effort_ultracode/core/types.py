@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-ConsensusStatus = Literal["unanimous", "no_consensus"]
+ConsensusStatus = Literal["unanimous", "no_consensus", "aborted"]
 RoundPhase = Literal["independent", "debate"]
 
 
@@ -63,3 +63,5 @@ class ConsensusResult:
     evidence_trail: list[str] = field(default_factory=list)
     points_of_disagreement: list[str] = field(default_factory=list)
     majority_stance: str | None = None
+    abort_reason: str | None = None
+    rounds_completed: int | None = None

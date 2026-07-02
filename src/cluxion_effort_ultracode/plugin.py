@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.resources
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -12,9 +11,15 @@ from typing import Any
 
 from cluxion_effort_ultracode.adapters.hermes_llm import HermesExecutableNotFoundError, HermesSubprocessLlm
 from cluxion_effort_ultracode.core import ConsensusEngine, ConsensusProtocolError
-from cluxion_effort_ultracode.core.consensus import MAX_AGENTS, MAX_ROUNDS
+from cluxion_effort_ultracode.core.consensus import (
+    DEFAULT_AGENT_TIMEOUT_S,
+    DEFAULT_DEBATE_BUDGET_S,
+    MAX_AGENTS,
+    MAX_ROUNDS,
+)
 from cluxion_effort_ultracode.core.ports import LlmPort
 from cluxion_effort_ultracode.doctor import render_json, run_doctor
+from cluxion_effort_ultracode.llm_factory import default_llm
 
 CONSENSUS_SCHEMA: dict[str, Any] = {
     "name": "cluxion_consensus",
@@ -47,6 +52,18 @@ CONSENSUS_SCHEMA: dict[str, Any] = {
                 "default": 3,
                 "minimum": 2,
                 "maximum": MAX_AGENTS,
+            },
+            "agent_timeout": {
+                "type": "number",
+                "description": "Per-agent timeout in seconds.",
+                "default": DEFAULT_AGENT_TIMEOUT_S,
+                "exclusiveMinimum": 0,
+            },
+            "debate_budget": {
+                "type": "number",
+                "description": "Total debate budget in seconds across all rounds.",
+                "default": DEFAULT_DEBATE_BUDGET_S,
+                "exclusiveMinimum": 0,
             },
         },
         "required": ["question"],
@@ -133,8 +150,16 @@ def _handle_consensus(args: object, *, llm_factory: object) -> dict[str, object]
         context = _text_arg(args, "context", default="")
         rounds = _int_arg(args, "rounds", default=3)
         agents = _int_arg(args, "agents", default=3)
+        agent_timeout = _float_arg(args, "agent_timeout", default=DEFAULT_AGENT_TIMEOUT_S)
+        debate_budget = _float_arg(args, "debate_budget", default=DEFAULT_DEBATE_BUDGET_S)
         llm = _call_llm_factory(llm_factory)
-        result = ConsensusEngine(llm, agents_count=agents, max_rounds=rounds).decide(question, context=context)
+        result = ConsensusEngine(
+            llm,
+            agents_count=agents,
+            max_rounds=rounds,
+            agent_timeout_s=agent_timeout,
+            debate_budget_s=debate_budget,
+        ).decide(question, context=context)
     except HermesExecutableNotFoundError as exc:
         return {
             "ok": False,
@@ -148,23 +173,7 @@ def _handle_consensus(args: object, *, llm_factory: object) -> dict[str, object]
 
 
 def _default_llm() -> HermesSubprocessLlm:
-    binary = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_BINARY", "hermes")
-    model = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_MODEL") or None
-    timeout = _timeout_from_env()
-    return HermesSubprocessLlm(binary=binary, timeout_seconds=timeout, model=model)
-
-
-def _timeout_from_env() -> float:
-    raw = os.getenv("CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT", "").strip()
-    if not raw:
-        return 120.0
-    try:
-        timeout = float(raw)
-    except ValueError as exc:
-        raise ValueError("CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT must be numeric") from exc
-    if timeout <= 0:
-        raise ValueError("CLUXION_EFFORT_ULTRACODE_HERMES_TIMEOUT must be greater than zero")
-    return timeout
+    return default_llm()
 
 
 def _call_llm_factory(llm_factory: object) -> LlmPort:
@@ -205,6 +214,16 @@ def _int_arg(args: Mapping[str, object], key: str, *, default: int) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} must be an integer") from exc
+
+
+def _float_arg(args: Mapping[str, object], key: str, *, default: float) -> float:
+    value = args.get(key, default)
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be numeric")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be numeric") from exc
 
 
 def _handle_doctor(args: dict[str, object], **_: object) -> str:

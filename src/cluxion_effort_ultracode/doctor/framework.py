@@ -18,6 +18,8 @@ SEVERITY_RANK: dict[str, int] = {
     "info": 4,
 }
 
+_GLOBAL_RUN_CACHE: dict[tuple[str, str, tuple[str, ...]], subprocess.CompletedProcess[str]] = {}
+
 
 @dataclass(frozen=True)
 class CatalogEntry:
@@ -86,7 +88,14 @@ class DoctorContext:
     def run_cached(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         key = tuple(cmd)
         if key not in self._run_cache:
-            self._run_cache[key] = self.run(cmd)
+            runner_key = (
+                getattr(self.run, "__module__", ""),
+                getattr(self.run, "__qualname__", type(self.run).__qualname__),
+                key,
+            )
+            if runner_key not in _GLOBAL_RUN_CACHE:
+                _GLOBAL_RUN_CACHE[runner_key] = self.run(cmd)
+            self._run_cache[key] = _GLOBAL_RUN_CACHE[runner_key]
         return self._run_cache[key]
 
     def which(self, binary: str) -> str | None:
@@ -119,7 +128,7 @@ def load_catalog(catalog_path: Path) -> tuple[CatalogEntry, ...]:
             elif val is not None:
                 data[f] = val
         if "check_id" in data:
-            entries.append(CatalogEntry(**data))  # type: ignore[arg-type]
+            entries.append(CatalogEntry(**data))
     return tuple(entries)
 
 

@@ -60,6 +60,30 @@ def test_structured_complete_retries_once_after_malformed_json() -> None:
     assert "previous response was not parseable" in retry_prompt
 
 
+def test_structured_complete_logs_first_parse_failure(capsys) -> None:
+    llm = HermesSubprocessLlm()
+
+    with patch(
+        "cluxion_effort_ultracode.adapters.hermes_llm.subprocess.run",
+        side_effect=[completed("not json"), completed('{"stance":"Adopt"}')],
+    ):
+        assert llm.complete("Prompt", schema={"type": "object"}) == {"stance": "Adopt"}
+
+    assert "Hermes structured JSON parse failed" in capsys.readouterr().err
+
+
+def test_transient_subprocess_error_retries_once() -> None:
+    llm = HermesSubprocessLlm()
+
+    with patch(
+        "cluxion_effort_ultracode.adapters.hermes_llm.subprocess.run",
+        side_effect=[subprocess.TimeoutExpired(["hermes"], timeout=1), completed("raw text")],
+    ) as run:
+        assert llm.complete("Prompt") == "raw text"
+
+    assert run.call_count == 2
+
+
 def test_structured_complete_treats_empty_code_fence_as_retryable_parse_failure() -> None:
     llm = HermesSubprocessLlm()
 

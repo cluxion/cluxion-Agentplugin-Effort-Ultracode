@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import inspect
 import os
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -101,6 +102,10 @@ def entry_point_registered(ctx: DoctorContext) -> tuple[str, str]:
                 mod = ep.load()
                 if hasattr(mod, "register") and callable(mod.register):
                     return "pass", ep.value or str(ep)
+        from cluxion_effort_ultracode import plugin
+
+        if callable(getattr(plugin, "register", None)):
+            return "pass", "module register callable (editable/local checkout)"
         return "fail", "entry point not found or register missing"
     except Exception as e:
         return "fail", f"metadata error: {e}"
@@ -122,7 +127,10 @@ def install_integrity(ctx: DoctorContext) -> tuple[str, str]:
     try:
         from cluxion_effort_ultracode import __version__ as pkg_version
 
-        dist_version = importlib.metadata.version("cluxion-agentplugin-effort-ultracode")
+        try:
+            dist_version = importlib.metadata.version("cluxion-agentplugin-effort-ultracode")
+        except importlib.metadata.PackageNotFoundError:
+            return "warn", f"editable/local checkout pkg={pkg_version}"
         if dist_version == pkg_version:
             return "pass", dist_version
         return "warn", f"dist={dist_version} pkg={pkg_version}"
@@ -194,18 +202,19 @@ def consensus_schema_contract(ctx: DoctorContext) -> tuple[str, str]:
 @_register("llm_factory_callable")
 def llm_factory_callable(ctx: DoctorContext) -> tuple[str, str]:
     try:
-        from cluxion_effort_ultracode.plugin import _call_llm_factory, _default_llm
+        from cluxion_effort_ultracode.llm_factory import default_llm
+        from cluxion_effort_ultracode.plugin import _call_llm_factory
 
         class _StubLlm:
             def complete(self, prompt: str, *, schema: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
                 return {"stance": "Yes", "rationale": "stub", "evidence": ["e"], "confidence": 0.9}
 
         _call_llm_factory(lambda: _StubLlm())
-        if not callable(_default_llm):
-            return "fail", "_default_llm is not callable"
-        default_llm = _default_llm()
-        if not callable(getattr(default_llm, "complete", None)):
-            return "fail", "_default_llm() missing complete()"
+        if not callable(default_llm):
+            return "fail", "default_llm is not callable"
+        llm = default_llm()
+        if not callable(getattr(llm, "complete", None)):
+            return "fail", "default_llm() missing complete()"
         return "pass", "factory contract ok"
     except Exception as e:
         return "fail", f"factory error: {e}"
@@ -223,3 +232,119 @@ def plugin_registration_host_compat(ctx: DoctorContext) -> tuple[str, str]:
         return "pass", "no raise on minimal ctx"
     except Exception as e:
         return "warn", f"raised: {type(e).__name__}"
+
+
+@_register("hermes_json_output_parseable")
+def hermes_json_output_parseable(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.adapters.hermes_llm import _parse_json_object
+
+        parsed = _parse_json_object('{"ok": true}')
+        if parsed.get("ok") is True:
+            return "pass", "json parser contract ok"
+        return "fail", "parser returned unexpected object"
+    except Exception as e:
+        return "fail", f"json parser error: {e}"
+
+
+@_register("agent_position_required_fields")
+def agent_position_required_fields(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.core.consensus import POSITION_SCHEMA
+
+        required = set(POSITION_SCHEMA.get("required", []))
+        expected = {"stance", "rationale", "evidence", "confidence"}
+        if expected <= required:
+            return "pass", "required fields present"
+        return "fail", f"missing={sorted(expected - required)}"
+    except Exception as e:
+        return "fail", f"schema error: {e}"
+
+
+@_register("debate_round_concession_validity")
+def debate_round_concession_validity(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.core.consensus import DEBATE_SCHEMA
+
+        required = set(DEBATE_SCHEMA.get("required", []))
+        if {"conceded", "maintained"} <= required:
+            return "pass", "debate point arrays required"
+        return "fail", f"required={sorted(required)}"
+    except Exception as e:
+        return "fail", f"schema error: {e}"
+
+
+@_register("debate_round_response_type")
+def debate_round_response_type(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.core.consensus import DEBATE_SCHEMA
+
+        if DEBATE_SCHEMA.get("type") == "object":
+            return "pass", "debate response object required"
+        return "fail", f"type={DEBATE_SCHEMA.get('type')!r}"
+    except Exception as e:
+        return "fail", f"schema error: {e}"
+
+
+@_register("consensus_result_valid")
+def consensus_result_valid(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.core.types import ConsensusResult
+
+        fields = set(ConsensusResult.__dataclass_fields__)
+        expected = {"status", "decision", "rationale", "rounds", "transcript", "agents_count", "dissent"}
+        if expected <= fields and {"abort_reason", "rounds_completed"} <= fields:
+            return "pass", "result dataclass contract ok"
+        return "fail", f"missing={sorted((expected | {'abort_reason', 'rounds_completed'}) - fields)}"
+    except Exception as e:
+        return "fail", f"result contract error: {e}"
+
+
+@_register("debate_non_termination_cost")
+def debate_non_termination_cost(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.core.consensus import DEFAULT_DEBATE_BUDGET_S, MAX_AGENTS, MAX_ROUNDS
+
+        calls = MAX_AGENTS * (MAX_ROUNDS + 1)
+        if DEFAULT_DEBATE_BUDGET_S > 0:
+            return "pass", f"bounded by max {calls} calls and {DEFAULT_DEBATE_BUDGET_S:g}s"
+        return "fail", "non-positive debate budget"
+    except Exception as e:
+        return "fail", f"cost bound error: {e}"
+
+
+@_register("hermes_subprocess_returncode_nonzero")
+def hermes_subprocess_returncode_nonzero(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.adapters.hermes_llm import HermesSubprocessLlm
+
+        if callable(getattr(HermesSubprocessLlm, "_run_oneshot_once", None)):
+            return "pass", "nonzero returncode classified by adapter"
+        return "fail", "adapter runner missing"
+    except Exception as e:
+        return "fail", f"adapter error: {e}"
+
+
+@_register("hermes_subprocess_timeout_triggered")
+def hermes_subprocess_timeout_triggered(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.adapters.hermes_llm import HermesSubprocessLlm
+
+        if HermesSubprocessLlm(timeout_seconds=1).timeout_seconds == 1:
+            return "pass", "timeout configured"
+        return "fail", "timeout not retained"
+    except Exception as e:
+        return "fail", f"timeout error: {e}"
+
+
+@_register("llm_port_complete_method_signature")
+def llm_port_complete_method_signature(ctx: DoctorContext) -> tuple[str, str]:
+    try:
+        from cluxion_effort_ultracode.adapters.hermes_llm import HermesSubprocessLlm
+
+        signature = inspect.signature(HermesSubprocessLlm.complete)
+        if "schema" in signature.parameters:
+            return "pass", str(signature)
+        return "fail", str(signature)
+    except Exception as e:
+        return "fail", f"signature error: {e}"

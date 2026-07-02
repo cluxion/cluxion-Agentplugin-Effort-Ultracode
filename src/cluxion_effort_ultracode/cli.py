@@ -12,9 +12,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from cluxion_effort_ultracode.adapters import CallableLlmAdapter
+from cluxion_effort_ultracode.adapters import CallableLlmAdapter, HermesExecutableNotFoundError
 from cluxion_effort_ultracode.core import ConsensusEngine, ConsensusProtocolError
-from cluxion_effort_ultracode.core.consensus import MAX_AGENTS, MAX_ROUNDS
+from cluxion_effort_ultracode.core.consensus import (
+    DEFAULT_AGENT_TIMEOUT_S,
+    DEFAULT_DEBATE_BUDGET_S,
+    MAX_AGENTS,
+    MAX_ROUNDS,
+)
 from cluxion_effort_ultracode.doctor import render_json, render_text, run_doctor
 
 
@@ -51,11 +56,32 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cluxion-ultracode")
     subparsers = parser.add_subparsers(dest="command")
 
-    consensus = subparsers.add_parser("consensus", help="Run an adversarial unanimous-consensus debate")
+    consensus = subparsers.add_parser(
+        "consensus",
+        help="Run an adversarial unanimous-consensus debate",
+        description="Worst-case model cost: agents * (rounds + 1) calls.",
+    )
     consensus.add_argument("--question", required=True, help="Decision, proposal, or question to decide")
     consensus.add_argument("--context", default="", help="Optional context supplied to every agent")
-    consensus.add_argument("--rounds", type=int, default=3, help=f"Maximum debate rounds after round 0, capped at {MAX_ROUNDS}")
+    consensus.add_argument(
+        "--rounds",
+        type=int,
+        default=3,
+        help=f"Maximum debate rounds after round 0, capped at {MAX_ROUNDS}",
+    )
     consensus.add_argument("--agents", type=int, default=3, help=f"Number of agents, default 3, capped at {MAX_AGENTS}")
+    consensus.add_argument(
+        "--agent-timeout",
+        type=float,
+        default=DEFAULT_AGENT_TIMEOUT_S,
+        help=f"Per-agent timeout in seconds, default {DEFAULT_AGENT_TIMEOUT_S:g}",
+    )
+    consensus.add_argument(
+        "--debate-budget",
+        type=float,
+        default=DEFAULT_DEBATE_BUDGET_S,
+        help=f"Total debate budget in seconds across all rounds, default {DEFAULT_DEBATE_BUDGET_S:g}",
+    )
     consensus.add_argument(
         "--adapter",
         choices=["hermes", "mock-unanimous", "mock-no-consensus"],
@@ -74,8 +100,33 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_consensus(namespace: argparse.Namespace) -> int:
     try:
         adapter = _resolve_adapter(namespace.adapter, agents=namespace.agents, rounds=namespace.rounds)
-        engine = ConsensusEngine(adapter, agents_count=namespace.agents, max_rounds=namespace.rounds)
+        engine = ConsensusEngine(
+            adapter,
+            agents_count=namespace.agents,
+            max_rounds=namespace.rounds,
+            agent_timeout_s=namespace.agent_timeout,
+            debate_budget_s=namespace.debate_budget,
+            progress_callback=lambda round_index, phase: print(
+                f"round {round_index} {phase} start", file=sys.stderr
+            ),
+        )
         result = engine.decide(namespace.question, context=namespace.context)
+    except HermesExecutableNotFoundError as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "hermes_not_found",
+                    "message": str(exc),
+                    "hint": (
+                        "Ensure the hermes executable is on PATH, or configure "
+                        "CLUXION_EFFORT_ULTRACODE_HERMES_BINARY."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
     except (ConsensusProtocolError, ValueError) as exc:
         print(json.dumps({"ok": False, "error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False))
         return 1
@@ -85,9 +136,9 @@ def _run_consensus(namespace: argparse.Namespace) -> int:
 
 def _resolve_adapter(name: str, *, agents: int, rounds: int) -> CallableLlmAdapter | _ScriptedConsensusLlm:
     if name == "hermes":
-        from cluxion_effort_ultracode.plugin import _default_llm
+        from cluxion_effort_ultracode.llm_factory import default_llm
 
-        return _default_llm()
+        return default_llm()
     return _mock_adapter(name, agents=agents, rounds=rounds)
 
 
@@ -122,29 +173,13 @@ def _update(
 def _mock_unanimous_outputs(agents: int) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
     for index in range(agents):
-        if index == 0:
-            outputs.append(_position("Adopt proposal", "The proposal has direct evidence and bounded risk.", ["E1"]))
-        else:
-            outputs.append(_position("Delay proposal", "The initial concern is unresolved risk.", [f"E{index + 1}"]))
-    for index in range(agents):
-        if index == 0:
-            outputs.append(
-                _update(
-                    "Adopt proposal",
-                    "Maintaining adoption because the opposing risks are mitigated by the evidence trail.",
-                    ["E1", "E-merged"],
-                    maintained=[{"point": "Adoption remains justified", "reason": "Risk evidence was bounded"}],
-                )
+        outputs.append(
+            _position(
+                "Adopt proposal",
+                "The deterministic mock starts unanimous for local smoke tests.",
+                [f"E{index + 1}"],
             )
-        else:
-            outputs.append(
-                _update(
-                    "Adopt proposal",
-                    "Conceding the delay stance because the mitigation evidence is stronger.",
-                    [f"E{index + 1}", "E-merged"],
-                    conceded=[{"point": "Delay until more data", "reason": "The shared evidence addresses the risk"}],
-                )
-            )
+        )
     return outputs
 
 
@@ -179,14 +214,18 @@ def _doctor(namespace):
         plugin="effort-ultracode",
         version=__import__("cluxion_effort_ultracode").__version__,
     )
-    text = render_text(
-        result,
-        __import__("cluxion_effort_ultracode.doctor.framework", fromlist=["load_catalog"]).load_catalog(catalog_path),
-        verbose=bool(getattr(namespace, "verbose", False)),
-    )
-    print(text, file=sys.stderr)
     if getattr(namespace, "json", False):
         print(render_json(result))
+    else:
+        text = render_text(
+            result,
+            __import__(
+                "cluxion_effort_ultracode.doctor.framework",
+                fromlist=["load_catalog"],
+            ).load_catalog(catalog_path),
+            verbose=bool(getattr(namespace, "verbose", False)),
+        )
+        print(text)
     return 0 if result.ok else 1
 
 

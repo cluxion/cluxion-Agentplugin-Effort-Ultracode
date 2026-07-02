@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -42,8 +44,8 @@ class HermesSubprocessLlm:
         output = self._run_oneshot(structured_prompt)
         try:
             return _parse_json_object(output)
-        except ConsensusProtocolError:
-            pass
+        except ConsensusProtocolError as exc:
+            print(f"Hermes structured JSON parse failed; retrying once: {exc}", file=sys.stderr)
 
         retry_prompt = _structured_prompt(prompt, schema=schema, retry=True)
         retry_output = self._run_oneshot(retry_prompt)
@@ -54,6 +56,27 @@ class HermesSubprocessLlm:
 
     def _run_oneshot(self, prompt: str) -> str:
         command = self._command(prompt)
+        last_transient: Exception | None = None
+        for attempt in range(2):
+            try:
+                return self._run_oneshot_once(command)
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                if isinstance(exc, FileNotFoundError):
+                    raise HermesExecutableNotFoundError(
+                        f"Hermes executable not found: {self.binary!r}. Ensure Hermes is installed and on PATH."
+                    ) from exc
+                last_transient = exc
+                if attempt == 0:
+                    time.sleep(0.1)
+                    continue
+                break
+        if isinstance(last_transient, subprocess.TimeoutExpired):
+            raise ConsensusProtocolError(
+                f"hermes -z timed out after {self.timeout_seconds:g} seconds"
+            ) from last_transient
+        raise ConsensusProtocolError(f"hermes -z failed to start: {last_transient}") from last_transient
+
+    def _run_oneshot_once(self, command: list[str]) -> str:
         try:
             completed = subprocess.run(
                 command,
@@ -63,14 +86,8 @@ class HermesSubprocessLlm:
                 check=False,
                 stdin=subprocess.DEVNULL,
             )
-        except FileNotFoundError as exc:
-            raise HermesExecutableNotFoundError(
-                f"Hermes executable not found: {self.binary!r}. Ensure Hermes is installed and on PATH."
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise ConsensusProtocolError(f"hermes -z timed out after {self.timeout_seconds:g} seconds") from exc
-        except OSError as exc:
-            raise ConsensusProtocolError(f"hermes -z failed to start: {exc}") from exc
+        except (subprocess.TimeoutExpired, OSError):
+            raise
 
         stdout = completed.stdout.strip()
         stderr = completed.stderr.strip()
