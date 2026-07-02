@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 
 import pytest
-from tests.test_consensus import ScriptedLlm, _agent_id_from_prompt, position
 
 from cluxion_effort_ultracode.core.consensus import ConsensusEngine
+from test_consensus import ScriptedLlm, _agent_id_from_prompt, position
 
 
 class SlowThenFineLlm:
